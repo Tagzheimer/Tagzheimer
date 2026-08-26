@@ -1,0 +1,26 @@
+# Netlify deployment config for the Tagzheimer frontend
+# Docs: https://docs.netlify.com/configure-builds-overview/
+
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+  # Set VITE_API_URL in the Netlify dashboard → Site settings → Environment variables
+  # Example: VITE_API_URL = "https://api.tagzheimer.com"
+
+# SPA fallback — all routes serve index.html so react-router can handle them
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# Security headers
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "geolocation=(), camera=(self), microphone=()"

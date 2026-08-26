@@ -1,15 +1,15 @@
-export default function StatCard({ label, value, color = 'text-gray-900', bg = 'bg-blue-50' }) {
+export default function StatCard({ label, value, sub }) {
   return (
-    <div className="bg-white rounded-xl px-4 py-4 shadow-sm border border-gray-100 flex items-center gap-4 min-h-[64px]">
-      <div className={`w-10 h-10 rounded-xl ${bg} flex items-center justify-center flex-shrink-0`}>
-        <span className={`text-lg font-bold ${color}`}>{value}</span>
+    <div className="bg-surface border border-hairline p-4 md:p-5 flex flex-col gap-2 md:gap-3 relative group hover:border-hairline-2 transition-colors">
+      {/* Corner tick marks */}
+      <div className="absolute top-0 left-0 w-1.5 h-1.5 border-t border-l border-hairline-3" />
+      <div className="absolute bottom-0 right-0 w-1.5 h-1.5 border-b border-r border-hairline-3" />
+
+      <div className="label-mono">{label}</div>
+      <div className="text-3xl md:text-4xl font-bold text-ink tabular-nums leading-none">
+        {String(value).padStart(2, '0')}
       </div>
-      <div>
-        <p className="text-[15px] font-medium text-gray-900">{label}</p>
-        <p className={`text-[13px] ${color}`}>
-          {label === 'Connected Devices' ? 'Total registered' : label === 'Active' ? 'Currently online' : 'Currently offline'}
-        </p>
-      </div>
+      {sub && <div className="text-[11px] text-ink-3 leading-tight">{sub}</div>}
     </div>
   );
 }
