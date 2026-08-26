@@ -16,8 +16,14 @@ function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
   if (loading) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" />
+      <div className="min-h-screen bg-canvas flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <div className="relative">
+            <div className="w-10 h-10 border border-hairline-3 rounded-sm" />
+            <div className="absolute inset-0 border-t border-white rounded-sm animate-spin" style={{ animationDuration: '0.8s' }} />
+          </div>
+          <span className="label-mono">Connecting</span>
+        </div>
       </div>
     );
   }
@@ -28,8 +34,14 @@ function PublicRoute({ children }) {
   const { user, loading } = useAuth();
   if (loading) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" />
+      <div className="min-h-screen bg-canvas flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <div className="relative">
+            <div className="w-10 h-10 border border-hairline-3 rounded-sm" />
+            <div className="absolute inset-0 border-t border-white rounded-sm animate-spin" style={{ animationDuration: '0.8s' }} />
+          </div>
+          <span className="label-mono">Connecting</span>
+        </div>
       </div>
     );
   }
@@ -38,10 +50,10 @@ function PublicRoute({ children }) {
 
 function AppLayout({ children, fullWidth }) {
   return (
-    <div className="min-h-dvh bg-background flex">
+    <div className="min-h-dvh bg-canvas flex">
       <Sidebar />
       <div className="flex-1 flex flex-col min-w-0 md:ml-64">
-        <div className={`flex-1 flex flex-col w-full ${fullWidth ? '' : 'max-w-5xl mx-auto md:px-6'}`}>
+        <div className={`flex-1 flex flex-col w-full ${fullWidth ? '' : 'max-w-5xl mx-auto md:px-8'}`}>
           {children}
         </div>
       </div>

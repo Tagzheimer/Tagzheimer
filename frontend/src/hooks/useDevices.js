@@ -1,22 +1,43 @@
 import { useState, useEffect, useCallback } from 'react';
+import { devicesAPI } from '../services/api';
 import { mockDevices } from '../services/mockData';
 
-let _nextId = 5;
-const MID = (n) => `00000000000000000000000${n}`.slice(-24);
-
+/**
+ * Device list hook — calls the real backend.
+ *
+ * If the backend is unreachable, falls back to mock data so the UI doesn't
+ * crash — but logs a clear console warning so the developer knows the data
+ * is fake.
+ *
+ * Set `VITE_API_URL` or use Profile → Backend Settings to point at the
+ * real backend.
+ */
 export function useDevices() {
   const [devices, setDevices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [usingMockData, setUsingMockData] = useState(false);
 
   const fetchDevices = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
-      await new Promise((r) => setTimeout(r, 400));
-      setDevices(mockDevices);
-      setError(null);
+      const { data } = await devicesAPI.getAll();
+      setDevices(Array.isArray(data) ? data : []);
+      setUsingMockData(false);
     } catch (err) {
-      setError(err.message);
+      // Backend unreachable — fall back to mock so UI still renders
+      const msg = err?.response?.status
+        ? `HTTP ${err.response.status}: ${err.response.statusText}`
+        : (err?.message || 'Backend unreachable');
+
+      console.warn(
+        '%c[useDevices] Falling back to mock data — backend unreachable: ' + msg,
+        'color:#fbbf24;font-weight:bold'
+      );
+      setDevices(mockDevices);
+      setError(msg);
+      setUsingMockData(true);
     } finally {
       setLoading(false);
     }
@@ -27,43 +48,27 @@ export function useDevices() {
   }, [fetchDevices]);
 
   const addDevice = async (deviceData) => {
-    const exists = mockDevices.find((d) => d.serialNumber === deviceData.serialNumber);
-    if (exists) {
-      throw new Error('Device with this serial number already exists');
-    }
-    const newDevice = {
-      _id: MID(_nextId++),
-      ...deviceData,
-      status: 'offline',
-      battery: 100,
-      lastSeen: new Date().toISOString(),
-      createdAt: new Date().toISOString(),
-    };
-    mockDevices.unshift(newDevice);
-    setDevices([...mockDevices]);
-    return newDevice;
+    const { data } = await devicesAPI.create(deviceData);
+    setDevices((prev) => [data, ...prev]);
+    return data;
   };
 
   const deleteDevice = async (id) => {
-    const idx = mockDevices.findIndex((d) => d._id === id);
-    if (idx !== -1) {
-      mockDevices.splice(idx, 1);
-      setDevices([...mockDevices]);
-    }
+    await devicesAPI.delete(id);
+    setDevices((prev) => prev.filter((d) => d._id !== id));
   };
 
-  const getDeviceById = (id) => {
-    return devices.find((d) => d._id === id) || null;
-  };
+  const getDeviceById = (id) => devices.find((d) => d._id === id) || null;
 
-  const totalDevices = devices.length;
-  const activeDevices = devices.filter((d) => d.status === 'online').length;
+  const totalDevices   = devices.length;
+  const activeDevices  = devices.filter((d) => d.status === 'online').length;
   const offlineDevices = devices.filter((d) => d.status === 'offline').length;
 
   return {
     devices,
     loading,
     error,
+    usingMockData,
     totalDevices,
     activeDevices,
     offlineDevices,

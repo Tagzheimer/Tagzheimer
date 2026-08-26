@@ -1,19 +1,55 @@
 @import "tailwindcss";
 
+/*
+ * Tagzheimer — Monochrome Dark Mode System
+ * ----------------------------------------
+ * Pure grayscale palette (no hue). Black canvas, white ink, mid-gray
+ * accents. All semantic colors (success/warning/danger) are rendered
+ * as tints of white at varying opacity so the system stays monochrome.
+ *
+ * Typography: DejaVu Sans Mono (already loaded as 4 webfonts in /fonts).
+ * The mono look reinforces the terminal/telemetry feel of a tracker.
+ */
+
 @theme {
-  --color-primary: #2563EB;
-  --color-success: #10B981;
-  --color-warning: #F59E0B;
-  --color-danger: #EF4444;
-  --color-background: #F8FAFC;
-  --color-card: #FFFFFF;
+  /* === Surface scale (dark → light) === */
+  --color-canvas:        #0a0a0a;   /* page background            */
+  --color-surface:       #0f0f0f;   /* card / sidebar / header    */
+  --color-surface-2:     #161616;   /* hover / inset / sub-panel  */
+  --color-surface-3:     #1f1f1f;   /* active / pressed           */
+
+  /* === Borders === */
+  --color-hairline:      #262626;   /* default 1px border         */
+  --color-hairline-2:    #333333;   /* hover border               */
+  --color-hairline-3:    #404040;   /* focus border               */
+
+  /* === Text === */
+  --color-ink:           #fafafa;   /* primary text               */
+  --color-ink-2:         #a3a3a3;   /* secondary text             */
+  --color-ink-3:         #6b6b6b;   /* muted / labels             */
+  --color-ink-4:         #404040;   /* placeholder / disabled     */
+
+  /* === Semantic (all monochrome tints) === */
+  --color-primary:       #ffffff;   /* accent = pure white        */
+  --color-success:       #e5e5e5;   /* "online"  = bright         */
+  --color-warning:       #a3a3a3;   /* "low"     = mid            */
+  --color-danger:        #737373;   /* "offline" = dim            */
+
+  /* === Legacy aliases (used in older className refs) === */
+  --color-background:    var(--color-canvas);
+  --color-card:          var(--color-surface);
+
+  /* === Breakpoints === */
   --breakpoint-md: 768px;
   --breakpoint-lg: 1024px;
   --breakpoint-xl: 1280px;
-  --font-mono: 'DejaVu Sans Mono', ui-monospace, monospace;
-  --font-sans: 'DejaVu Sans Mono', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+
+  /* === Fonts === */
+  --font-mono: 'DejaVu Sans Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  --font-sans: 'DejaVu Sans Mono', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 
+/* === Webfont face declarations === */
 @font-face {
   font-family: 'DejaVu Sans Mono';
   src: url('/fonts/DejaVuSansMono.ttf') format('truetype');
@@ -21,7 +57,6 @@
   font-style: normal;
   font-display: swap;
 }
-
 @font-face {
   font-family: 'DejaVu Sans Mono';
   src: url('/fonts/DejaVuSansMono-Bold.ttf') format('truetype');
@@ -29,7 +64,6 @@
   font-style: normal;
   font-display: swap;
 }
-
 @font-face {
   font-family: 'DejaVu Sans Mono';
   src: url('/fonts/DejaVuSansMono-Oblique.ttf') format('truetype');
@@ -37,7 +71,6 @@
   font-style: italic;
   font-display: swap;
 }
-
 @font-face {
   font-family: 'DejaVu Sans Mono';
   src: url('/fonts/DejaVuSansMono-BoldOblique.ttf') format('truetype');
@@ -46,6 +79,7 @@
   font-display: swap;
 }
 
+/* === Reset & base === */
 *, *::before, *::after {
   -webkit-tap-highlight-color: transparent;
 }
@@ -53,17 +87,30 @@
 html {
   font-size: 16px;
   -webkit-text-size-adjust: 100%;
+  color-scheme: dark;
+  scrollbar-color: #2a2a2a #0a0a0a;
 }
 
 body {
   margin: 0;
-  font-family: 'DejaVu Sans Mono', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto',
-    'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+  font-family: 'DejaVu Sans Mono', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-color: var(--color-background);
+  background-color: var(--color-canvas);
+  color: var(--color-ink);
   overscroll-behavior: none;
   overflow-x: hidden;
+
+  /* Subtle noise texture for that "terminal print" feel */
+  background-image:
+    radial-gradient(circle at 1px 1px, rgba(255,255,255,0.018) 1px, transparent 0);
+  background-size: 3px 3px;
+}
+
+/* Tabular numbers everywhere — crucial for telemetry-style data */
+body, h1, h2, h3, p, span, td, th, button, input, select, textarea {
+  font-variant-numeric: tabular-nums;
 }
 
 #root {
@@ -72,46 +119,125 @@ body {
   flex-direction: column;
 }
 
+/* === Scrollbar styling === */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: #0a0a0a; }
+::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 0; }
+::-webkit-scrollbar-thumb:hover { background: #404040; }
+
+/* === Leaflet overrides (dark mode map) === */
 .leaflet-container {
   height: 100%;
   width: 100%;
+  background: #0a0a0a;
 }
 
+/* Dark-mode OpenStreetMap filter — inverts hues + reduces brightness.
+   This works because OSM tiles are light; inverting → dark map. */
+.leaflet-tile-pane {
+  filter: invert(1) hue-rotate(180deg) brightness(0.85) contrast(0.9) saturate(0.3);
+}
+
+.leaflet-control-zoom a {
+  background: #0f0f0f !important;
+  color: #fafafa !important;
+  border-color: #262626 !important;
+  border-radius: 0 !important;
+}
+.leaflet-control-zoom a:hover {
+  background: #1f1f1f !important;
+  color: #ffffff !important;
+}
+
+.leaflet-popup-content-wrapper {
+  background: #0f0f0f !important;
+  color: #fafafa !important;
+  border: 1px solid #262626 !important;
+  border-radius: 2px !important;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.6) !important;
+}
+.leaflet-popup-tip {
+  background: #0f0f0f !important;
+  border: 1px solid #262626 !important;
+}
+.leaflet-popup-content { margin: 10px 14px !important; }
+.leaflet-popup-content a { color: #ffffff !important; }
+
+.leaflet-bar { border: 1px solid #262626 !important; }
+
+/* === Utility classes === */
 .min-touch {
-  min-height: 48px;
-  min-width: 48px;
+  min-height: 44px;
+  min-width: 44px;
 }
 
 .tap-highlight {
-  -webkit-tap-highlight-color: rgba(37, 99, 235, 0.15);
+  -webkit-tap-highlight-color: rgba(255,255,255,0.06);
 }
 
 .overscroll-contain {
   overscroll-behavior: contain;
 }
 
-@keyframes slide-up {
-  from { transform: translateY(100%); }
-  to { transform: translateY(0); }
+/* Sharp corner preference — monochrome terminal aesthetic */
+.sharp { border-radius: 0 !important; }
+
+/* Fine uppercase labels for headers / metadata */
+.label-mono {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 11px;
+  color: var(--color-ink-3);
+  font-weight: 700;
 }
 
+/* Hairline divider that reads on dark */
+.hairline { border-color: var(--color-hairline); }
+
+/* === Animations === */
+@keyframes slide-up {
+  from { transform: translateY(100%); opacity: 0.6; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
 @keyframes fade-in {
   from { opacity: 0; }
-  to { opacity: 1; }
+  to   { opacity: 1; }
+}
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.4; }
+}
+@keyframes scan-line {
+  0%   { transform: translateY(-100%); }
+  100% { transform: translateY(100%); }
 }
 
-.animate-slide-up {
-  animation: slide-up 0.25s ease-out;
+.animate-slide-up  { animation: slide-up 0.22s cubic-bezier(0.16,1,0.3,1); }
+.animate-fade-in   { animation: fade-in 0.18s ease-out; }
+.animate-pulse-soft{ animation: pulse-soft 2s ease-in-out infinite; }
+
+/* === Safe areas (notch support) === */
+.safe-bottom { padding-bottom: env(safe-area-inset-bottom, 0px); }
+.safe-top    { padding-top:    env(safe-area-inset-top,    0px); }
+
+/* === Selection === */
+::selection {
+  background: #ffffff;
+  color: #0a0a0a;
 }
 
-.animate-fade-in {
-  animation: fade-in 0.2s ease-out;
+/* === Form controls inherit dark theme === */
+input, textarea, select {
+  caret-color: #ffffff;
+}
+input::placeholder, textarea::placeholder {
+  color: var(--color-ink-4);
+}
+input:focus, textarea:focus, select:focus {
+  outline: none;
 }
 
-.safe-bottom {
-  padding-bottom: env(safe-area-inset-bottom, 0px);
-}
-
-.safe-top {
-  padding-top: env(safe-area-inset-top, 0px);
+/* Checkbox — recolor to monochrome */
+input[type="checkbox"] {
+  accent-color: #ffffff;
 }

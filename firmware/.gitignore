@@ -1,0 +1,7 @@
+// .gitignore for the firmware folder.
+// Keep secrets out of version control.
+
+secrets.h
+*.bak
+*.log
+.build/

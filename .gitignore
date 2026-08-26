@@ -15,3 +15,23 @@ dist-ssr
 *.ntvs*
 *.njsproj
 *.sln
+
+# Build outputs
+frontend/dist
+frontend/dist-ssr
+backend/dist
+
+# Dependencies (keep lockfiles, ignore installed modules)
+backend/node_modules
+frontend/node_modules
+mobile/node_modules
+mobile/.expo
+mobile/dist
+
+# Runtime / test artifacts
+.playwright-mcp/
+device-details.png
+coverage
+
+# OS
+Thumbs.db
