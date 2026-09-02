@@ -74,7 +74,9 @@ Fastest way to run everything on your dev machine:
 git clone https://github.com/Tagzheimer/Tagzheimer.git
 cd Tagzheimer
 cp .env.example .env
-# Edit .env: set JWT_SECRET (run `openssl rand -hex 32` to generate one)
+# Edit .env: set JWT_SECRET (`openssl rand -hex 32`) + SUPABASE_URL /
+# SUPABASE_ANON_KEY / SUPABASE_SERVICE_KEY / SUPABASE_JWT_SECRET
+# (docker-compose refuses to start without them)
 make docker-up
 ```
 
@@ -86,10 +88,12 @@ Open:
 Or use the interactive picker:
 
 ```bash
-bash deploy.sh    # picks option 1
+bash deploy.sh    # follow the prompts (pick 1 for the local Docker stack)
 ```
 
-To stop: `make docker-down`. To wipe all data: `make docker-clean` (deletes the Mongo volume).
+To stop: `make docker-down`. To wipe all data: `make docker-clean` (removes the compose stack's containers).
+
+> Note: there is **no MongoDB container** in the v3 stack — Supabase is the database (hosted). The local Docker stack runs backend + frontend only.
 
 ---
 
@@ -130,11 +134,16 @@ After deploy: backend URL = `https://tagzheimer-backend.fly.dev`.
 npm install -g @railway/cli
 railway login
 railway init
-railway add --plugin mongodb    # adds a Mongo plugin
 railway up
 ```
 
-Set env vars via the Railway dashboard → Variables tab.
+Set env vars via the Railway dashboard → Variables tab (same set as Fly.io):
+
+- `JWT_SECRET` ← `openssl rand -hex 32`
+- `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_KEY`, `SUPABASE_JWT_SECRET`
+- `CLIENT_URL`
+
+No database plugin needed — the database lives in Supabase (see "Supabase setup" above).
 
 ### Backend — Render
 
@@ -144,7 +153,6 @@ Set env vars via the Railway dashboard → Variables tab.
 4. Add environment variables in the Render dashboard:
    - `JWT_SECRET`
    - `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_KEY`, `SUPABASE_JWT_SECRET`
-   - `CLIENT_URL`
    - `CLIENT_URL` (frontend URL for CORS)
 5. Render builds and deploys
 
@@ -261,7 +269,6 @@ On first boot, the firmware calls `POST /api/devices/pair` with `SERIAL_NUMBER`,
 | Frontend | Vercel | `https://app.tagzheimer.com` |
 | Backend | Fly.io | `https://api.tagzheimer.com` |
 | Database + Auth | Supabase (free tier) | `https://tagzheimer.supabase.co` |
-| Firebase Auth | Firebase (free tier) | dashboard → Authentication |
 | Mobile app | EAS → Play Store (internal track) | sideloaded APK initially |
 | ESP32 firmware | Your local machine | Arduino IDE → USB cable → ESP32 |
 
@@ -323,7 +330,7 @@ The backend exposes `GET /api/health` returning:
 {
   "success": true,
   "message": "Tagzheimer API is running",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "mode": "production",
   "timestamp": "2026-08-20T..."
 }
@@ -337,16 +344,12 @@ For uptime monitoring: hook UptimeRobot (free) or Pingdom to `/api/health`.
 
 ## Backups
 
-**Supabase:** automatic daily backups on the free tier (7-day retention). Pro plan has 30-day PITR.
+**Supabase:** automatic daily backups on the free tier (7-day retention). Pro plan has 30-day PITR. There is **no local database** in the v3 stack — the backend's only persistent state is in Supabase, so restoring = choosing a Supabase backup (or re-running `schema.sql` + re-creating your Supabase project).
 
-For Docker-deployed backend (no DB to back up locally — DB is in Supabase):
+For extra safety you can export the tables yourself:
 
 ```bash
-# Backup
-docker compose exec mongo mongodump --archive --gzip --username tagz --password <password> --authenticationDatabase admin > backup-$(date +%Y%m%d).gz
-
-# Restore
-docker compose exec -T mongo mongorestore --archive --gzip --username tagz --password <password> --authenticationDatabase admin < backup-20260820.gz
+supabase db dump -p <project-ref>     # schema + functions
 ```
 
 ---
@@ -380,14 +383,13 @@ Caddy auto-provisions Let's Encrypt certs.
 - [ ] Supabase service_role key is NEVER exposed in the frontend (only anon key)
 - [ ] Supabase RLS policies are enabled (run schema.sql)
 - [ ] Supabase DB password is strong and stored safely
-- [ ] Firebase service account JSON is in env vars, not committed to repo
 - [ ] `CLIENT_URL` matches your frontend URL exactly (CORS)
 - [ ] Backend is behind HTTPS (no plain HTTP in production)
-- [ ] Rate limits are sensible (default: 200 req / 15 min / IP for general, 100 for /update)
+- [ ] Rate limits are sensible (default: 200 req / 15 min / IP for general, 100 for /update and /batch)
 - [ ] Docker `HEALTHCHECK` works (verify `docker ps` shows "healthy")
-- [ ] Mongo data volume has backups
 - [ ] `secrets.h` is git-ignored (firmware) and not committed
-- [ ] Firebase user accounts have proper sign-in rules (no anonymous if you don't want it)
+- [ ] Supabase email confirmation is ON for real deployments (confirm email in Authentication → Providers → Email)
+- [ ] `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` are set at frontend build time
 
 ---
 

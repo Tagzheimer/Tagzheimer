@@ -1,8 +1,8 @@
 # Tagzheimer Firmware — ESP32-WROVER + NEO-6M GPS Tracker
 
-Arduino IDE firmware that reads GPS coordinates from a NEO-6M module and POSTs them to the Tagzheimer backend's `/api/location/update` endpoint on a configurable interval (default: every 5 minutes). Designed for battery-powered operation with deep sleep between fixes.
+Arduino IDE firmware that reads GPS coordinates from a NEO-6M module and POSTs them to the Tagzheimer backend on a configurable interval (default: every 5 minutes). Designed for battery-powered operation with deep sleep between fixes.
 
-> **Status:** v1.0 — works against the existing Tagzheimer backend (demo mode + production). Tested logic; you still need to flash to actual hardware for the final integration test.
+> **Status:** v2.0 — easy pairing by serial number against the v3 backend (demo mode + production). Tested logic; you still need to flash to actual hardware for the final integration test.
 
 ---
 
@@ -53,9 +53,9 @@ Edit `config.h`:
 
 | Setting | What it does |
 |---------|--------------|
-| `DEVICE_ID` | MongoDB `_id` of the device document in your backend. Get it from `db.devices.findOne({serialNumber:"TAG-001"})._id` or from the dashboard. Must be a 24-char hex string. |
+| `SERIAL_NUMBER` | The serial printed on the device, e.g. `TAG-001`. The backend auto-provisions the device on first pair if it doesn't exist. |
 | `BACKEND_URL` | Where your backend is reachable, e.g. `http://192.168.1.50:5000` (dev) or `https://api.tagzheimer.com` (prod). |
-| `AUTH_TOKEN` | `mock-token` in dev/demo mode, or a Firebase ID token in production. |
+| `BACKEND_ACCESS_TOKEN` | Leave **empty** — firmware pairs automatically on first boot and stores the token in NVS. Set to `mock-token` (demo) or a hand-issued token only to skip pairing. |
 | `UPDATE_INTERVAL_SECONDS` | How often to wake up and report. Default 300 (5 min). |
 | `ENABLE_DEEP_SLEEP` | `1` for battery operation (recommended), `0` while debugging. |
 
@@ -71,12 +71,13 @@ See [docs/wiring.md](docs/wiring.md) for the pin map and a Fritzing-style ASCII 
 
 ### 7. Register the device in your backend
 
-The backend's `validateUpdateLocation` middleware requires `deviceId` to be a valid Mongo ID pointing to an existing `Device` document. Before the firmware can POST, the device must exist:
+No manual registration required — the firmware calls `POST /api/devices/pair` with its `SERIAL_NUMBER` on first boot and the backend auto-provisions the device:
 
-- Start the backend in demo mode: `DEMO_MODE=true npm start`
-- (Demo mode auto-seeds 4 devices; use `_id` = `000000000000000000000001` which matches `DEVICE_ID` in `config.h` — that's why that's the default.)
+- Start the backend in demo mode: `cd backend && DEMO_MODE=true PORT=5000 bun run server.js`
+- (Demo mode auto-seeds 4 devices `TAG-001`–`TAG-004`; use one of those serials or anything else you like — pair will create it.)
+- The returned `deviceId` + `accessToken` are stored in NVS (`Preferences`) and reused on every boot.
 
-In production: create the device via the dashboard (which calls `POST /api/devices`) and copy the returned `_id` into `config.h`.
+In production, devices auto-provision the same way. You can rename them / assign a patient in the dashboard afterwards.
 
 ---
 
@@ -90,6 +91,13 @@ In production: create the device via the dashboard (which calls `POST /api/devic
 │  (5 min timer)  │        │
 └────────┬────────┘        │
          │ wake (reset)    │
+         ▼                 │
+┌─────────────────┐        │
+│ 0. ensurePaired │        │
+│   (NVS token   │        │
+│    or POST /pair)        │
+└────────┬────────┘        │
+         │                 │
          ▼                 │
 ┌─────────────────┐        │
 │ 1. WiFi connect │        │
@@ -121,13 +129,20 @@ In production: create the device via the dashboard (which calls `POST /api/devic
 └─────────────────┘
 ```
 
+### Pairing & token refresh
+
+1. First boot: `BACKEND_ACCESS_TOKEN` is empty → firmware calls `POST /api/devices/pair` with `SERIAL_NUMBER`.
+2. Backend returns `{ deviceId, accessToken }`; both are stored in NVS.
+3. Every send uses `Authorization: Bearer <accessToken>`.
+4. On a `401` (expired/revoked token) the firmware re-pairs automatically and retries.
+
 ### Offline queue
 
 If WiFi is down or the backend is unreachable, the firmware persists the fix to NVS (non-volatile storage) and retries on the next successful cycle. The queue holds up to 10 entries — at the default 5-minute interval that's 50 minutes of tolerance.
 
 ### Battery monitoring
 
-Optional: a 2:1 voltage divider (2 × 100 kΩ) feeds battery voltage into GPIO 35 (ADC1_CH7). The reading is sent in the `meta.battery` field of the JSON body. The current backend ignores this field, but the device model already has a `battery` field (0–100) ready to be wired up — see "Extending the backend" below.
+Optional: a 2:1 voltage divider (2 × 100 kΩ) feeds battery voltage into GPIO 35 (ADC1_CH7). The reading is sent in the `meta.battery` field of the JSON body and stored by the backend (validated 0–100).
 
 ### LED status patterns
 
@@ -145,15 +160,30 @@ Optional: a 2:1 voltage divider (2 × 100 kΩ) feeds battery voltage into GPIO 3
 
 ## Backend Integration
 
-The firmware calls exactly one endpoint:
+The firmware calls exactly two endpoints (via `backend_client.{h,cpp}`):
+
+**1. Pair (first boot only):**
+
+```http
+POST /api/devices/pair
+Content-Type: application/json
+
+{
+  "serialNumber": "TAG-001"
+}
+```
+
+Response → `{ deviceId, accessToken, ... }` stored in NVS.
+
+**2. Send fix:**
 
 ```http
 POST /api/location/update
 Content-Type: application/json
-Authorization: Bearer mock-token
+Authorization: Bearer <accessToken>
 
 {
-  "deviceId": "000000000000000000000001",
+  "serialNumber": "TAG-001",
   "latitude": 40.712800,
   "longitude": -74.006000,
   "meta": {
@@ -168,33 +198,37 @@ Authorization: Bearer mock-token
 This matches `validateUpdateLocation` in `backend/middleware/validation.js`:
 
 ```js
-body('deviceId').isMongoId()
+body('deviceId').optional().matches(MongoOrUuid)
+body('serialNumber').optional().isString().isLength({ min: 3, max: 64 })
 body('latitude').isFloat({ min: -90, max: 90 })
 body('longitude').isFloat({ min: -180, max: 180 })
+body('meta.battery').optional().isInt({ min: 0, max: 100 })
+body('meta.hdop').optional().isFloat({ min: 0, max: 99 })
+body('meta.satellites').optional().isInt({ min: 0, max: 50 })
 ```
 
-The `meta` block is ignored by the current validator (extra fields pass through `express.json()` silently), but it's there for future use. Backend returns:
+The firmware's `meta` block is validated and **stored** on each location row (battery, hdop, satellites, altitude, speed, source). Backend returns:
 
 - `201 Created` → `{ success: true, location: {...} }` — firmware marks the cycle successful
-- `404` → device not found (check `DEVICE_ID` in `config.h`)
-- `401` → bad token (check `AUTH_TOKEN`)
-- `400` → validation failure (usually bad `deviceId` format)
+- `200` → pair success
+- `404` → device not found
+- `401` → bad/expired token — firmware re-pairs automatically
+- `400` → validation failure
 - `5xx` → backend error, firmware will retry then queue offline
 
 ### Running the backend in demo mode
 
-Easiest way to test end-to-end without Firebase:
+Easiest way to test end-to-end without Supabase:
 
 ```bash
 cd backend
-cp .env.example .env   # if there's one; otherwise create .env
-echo "DEMO_MODE=true" >> .env
+bun install
+echo "DEMO_MODE=true" >> .env   # or set in your shell
 echo "PORT=5000" >> .env
-npm install
-npm start
+bun run server.js               # or: npm start
 ```
 
-In demo mode the backend accepts `Authorization: Bearer mock-token` and seeds 4 devices with IDs `000000000000000000000001` through `000000000000000000000004`. The firmware's default `DEVICE_ID` matches device #1.
+In demo mode the backend accepts `Authorization: Bearer mock-token` and seeds 4 devices with serials `TAG-001` through `TAG-004`. The default `SERIAL_NUMBER` in `config.h` matches device #1.
 
 ### Local network gotcha
 
@@ -208,22 +242,21 @@ The ESP32 needs to reach your backend. If your backend runs on your laptop at `h
 
 ## Extending the Backend (optional)
 
-The firmware already sends `meta.battery`. To store it:
+The v3 backend already stores `meta.battery`, `meta.satellites`, `meta.hdop`, `meta.altitude`, `meta.speed`, and `meta.source`. If you want to add a new telemetry field (e.g. an SOS flag), edit the schema:
 
-1. `backend/models/Location.js` — add fields:
-   ```js
-   satellites: Number,
-   hdop:       Number,
-   battery:    Number,
+1. `backend/supabase/schema.sql` — add a column to `public.locations`, e.g.:
+   ```sql
+   alter table public.locations add column if not exists sos boolean not null default false;
    ```
-2. `backend/middleware/validation.js` — extend `validateUpdateLocation`:
+2. `backend/middleware/validation.js` — add a rule, e.g.:
    ```js
-   body('meta.sats').optional().isInt({ min: 0, max: 50 }),
-   body('meta.battery').optional().isInt({ min: 0, max: 100 }),
+   body('meta.sos').optional().isBoolean(),
    ```
-3. `backend/controllers/locationController.js` — read `req.body.meta` and pass to `Location.create`.
-
-Same pattern works for an SOS flag — add `body('meta.sos').optional().isBoolean()` and surface it on the dashboard.
+3. `backend/controllers/locationController.js` — copy it into the insert, e.g.:
+   ```js
+   sos: meta.sos ?? null,
+   ```
+4. Re-run `schema.sql` in the Supabase SQL editor and surface the field on the dashboard.
 
 ---
 
@@ -234,8 +267,8 @@ Same pattern works for an SOS flag — add `body('meta.sos').optional().isBoolea
 | `[WIFI] connect timeout` | Wrong SSID/password, or 5 GHz only network | Use 2.4 GHz; verify `secrets.h` |
 | `[GPS] FIX timeout` | Indoor use, bad antenna, cold start | Take it outside; wait 30 s for warm fix; check wiring |
 | `POST failed: code=-1` | Backend unreachable | Check `BACKEND_URL` and that backend is running |
-| `POST failed: code=404` | `DEVICE_ID` not in DB | Register device first; verify the 24-char hex |
-| `POST failed: code=401` | Bad token | In demo mode use `mock-token`; in prod, mint a real Firebase token |
+| `POST failed: code=404` | Device not found | Pairing auto-provisions it — unless the serial was invalid at pair time. Check the boot log for the pair attempt. |
+| `POST failed: code=401` | Token expired/revoked | Firmware auto re-pairs on 401 — confirm NVS wasn't corrupted |
 | GPS shows 0 satellites forever | TX/RX swapped, or wrong baud | Swap `GPS_RX_PIN`/`GPS_TX_PIN`; try 38400 if NEO-M8N |
 | ESP32 resets in a loop | Insufficient power | Use a 2 A USB power supply or LiPo with charge controller |
 | Deep sleep resets immediately | `ENABLE_DEEP_SLEEP=1` + boot loop | This is normal! Each wake IS a reset — read serial monitor |
@@ -248,12 +281,12 @@ Same pattern works for an SOS flag — add `body('meta.sos').optional().isBoolea
 firmware/
 ├── src/
 │   ├── tagzheimer_firmware.ino   ← main sketch (open this in Arduino IDE)
-│   ├── config.h                  ← edit this for your deployment
+│   ├── config.h                  ← edit this for your deployment (SERIAL_NUMBER, BACKEND_URL)
 │   ├── secrets.example.h         ← copy to secrets.h, fill in WiFi creds
 │   ├── secrets.h                 ← (you create — git-ignored)
 │   ├── gps_handler.{h,cpp}       ← NEO-6M NMEA parsing
 │   ├── wifi_manager.{h,cpp}      ← WiFi connect/disconnect
-│   ├── backend_client.{h,cpp}    ← HTTP POST + offline queue
+│   ├── backend_client.{h,cpp}    ← pair + send + offline queue + token in NVS
 │   ├── status_led.{h,cpp}        ← LED blink patterns
 │   └── power_manager.{h,cpp}     ← battery ADC + deep sleep
 ├── docs/
@@ -268,7 +301,6 @@ firmware/
 
 - [ ] WiFi captive portal for first-boot configuration (no hardcoded SSID)
 - [ ] OTA firmware updates
-- [ ] Firebase token refresh via REST API (current: static token)
 - [ ] Motion-aware update rate (MPU6050 → 1 Hz when moving, 5 min when idle)
 - [ ] OLED display support (SSD1306 over I2C)
 - [ ] LoRa fallback for areas without WiFi

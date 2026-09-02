@@ -118,9 +118,9 @@ GPIO 16 and 17 are output-safe, not strapping pins, and not used by flash — pe
 ## First Boot Checklist
 
 1. ✅ WiFi SSID and password in `secrets.h` (2.4 GHz network!)
-2. ✅ `DEVICE_ID` in `config.h` matches a device in your backend
+2. ✅ `SERIAL_NUMBER` in `config.h` — the backend pairs/auto-provisions it on first boot
 3. ✅ `BACKEND_URL` is reachable from the ESP32's network (not `localhost`)
-4. ✅ `AUTH_TOKEN` is `mock-token` (demo mode) or a real Firebase token (prod)
+4. ✅ `BACKEND_ACCESS_TOKEN` left empty so the firmware pairs automatically (or set to `mock-token` for demo mode to skip pairing)
 5. ✅ GPS antenna has a clear view of the sky for the first cold start (≤ 30 s)
 6. ✅ USB cable is data-capable (some cheap cables are power-only)
 7. ✅ Serial Monitor set to 115200 baud

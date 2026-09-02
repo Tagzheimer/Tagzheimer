@@ -3,47 +3,50 @@
 Real-time GPS tracking system for Alzheimer's patients. Four components, one monochrome dark-mode aesthetic.
 
 > **Runtime:** Backend + frontend use **Bun** (faster installs, smaller Docker images). Mobile app uses **npm** (Expo has rough edges with Bun). Install Bun: `curl -fsSL https://bun.sh/install | bash`.
+>
+> **Database + Auth:** Handled by [Supabase](https://supabase.com) — Postgres + Auth + RLS. No MongoDB or Firebase. Free tier covers ~500 MB DB + 50,000 MAU auth. In demo mode (`DEMO_MODE=true`) the backend uses an in-memory store, so you can run the whole stack with zero infrastructure.
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                                                             │
+┌───────────────────────────────────────────────────────────────┐
+│                                                               │
 │   [ ESP32 + NEO-6M ] ── HTTPS ──► [ Backend ] ◄── HTTPS ── [ Android app ]
-│                                       │                    (Expo)
-│                                       │
-│                                       ▼
-│                                  [ MongoDB ]
-│                                       │
-│                                       ▼
+│                                        │                    (Expo)
+│                                        │
+│                                        ▼
+│                                [ Supabase ]
+│                             (Postgres + Auth)
+│                                        │
+│                                        ▼
 │                                  [ Frontend ]  ◄── Caregiver (browser)
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
+│                                                               │
+└───────────────────────────────────────────────────────────────┘
 ```
 
 ## Components
 
 | Folder | What | Tech | Status |
 |--------|------|------|--------|
-| `backend/` | REST API | Node.js + Express + MongoDB (or in-memory demo) | v2.0 |
-| `frontend/` | Caregiver dashboard | Vite + React 19 + Tailwind v4 (monochrome dark) | v2.0 |
-| `mobile/` | Android tracker app | Expo + React Native + TypeScript (monochrome dark) | v2.0 |
+| `backend/` | REST API | Bun + Express + Supabase JS client (or in-memory demo) | v3.0 |
+| `frontend/` | Caregiver dashboard | Vite + React 19 + Tailwind v4 (monochrome dark) | v3.0 |
+| `mobile/` | Android tracker app | Expo SDK 52 + React Native + TypeScript (monochrome dark) | v2.1 |
 | `firmware/` | ESP32-WROVER + NEO-6M firmware | Arduino IDE + TinyGPSPlus + ArduinoJson | v2.0 |
 
 ## Quick start
 
-### 1. Demo mode (5 minutes, no DB, no Firebase, no hardware)
+### 1. Demo mode (5 minutes, no DB, no Supabase, no hardware)
 
 ```bash
 # Backend in demo mode (in-memory store, accepts mock-token)
-cd backend && DEMO_MODE=true npm start
+cd backend && bun install && DEMO_MODE=true PORT=5000 bun run server.js
 
 # Frontend (in another terminal)
-cd frontend && npm install && npm run dev
+cd frontend && bun install && bun run dev
 # Open http://localhost:5173 — sign in with any email/password
 
 # Mobile app (yet another terminal)
 cd mobile && npm install --legacy-peer-deps && npx expo start
 # Scan QR with Expo Go on your Android phone
-# Pair with serial "TAG-001", tap "Send Now"
+# Pair with serial "TAG-001", tap "START TRACKING"
 ```
 
 You're now running the full stack end-to-end with zero infrastructure. The dashboard shows your phone's GPS location updating in real-time.
@@ -52,35 +55,37 @@ You're now running the full stack end-to-end with zero infrastructure. The dashb
 
 ```bash
 cp .env.example .env
-# Set JWT_SECRET in .env (run `openssl rand -hex 32`)
+# Fill in JWT_SECRET (run `openssl rand -hex 32`) + your Supabase credentials
 make docker-up
 
 # Frontend: http://localhost:8080
 # Backend:  http://localhost:5000/api/health
-# MongoDB:  mongodb://localhost:27017
+# (No MongoDB container — Supabase is the database, hosted)
 ```
 
 ### 3. Cloud deployment
 
-See [`DEPLOY.md`](./DEPLOY.md) for the full deployment guide covering Fly.io / Railway / Render / Vercel / Netlify / EAS Build / Arduino IDE.
+See [`DEPLOY.md`](./DEPLOY.md) for the full deployment guide covering Supabase setup, Fly.io / Railway / Render / Vercel / Netlify / EAS Build / Arduino IDE.
 
 ## Make commands
 
 ```bash
 make              # show all commands
 make dev          # start backend + frontend in demo mode
-make docker-up    # full stack via docker-compose
+make docker-up    # full stack via docker-compose (backend + frontend)
 make test         # run all test suites
 make help         # same as above
 ```
 
-## Key features (v2.0)
+## Key features (v3)
 
-- **Easy device pairing** — POST `/api/devices/pair` with just a serial number; auto-provisions if device doesn't exist; returns a signed JWT for subsequent updates
+- **Supabase backend** — Postgres + Auth + RLS. Caregivers sign up/log in with email + password; all tables are row-level-secured per owner.
+- **Easy device pairing** — POST `/api/devices/pair` with just a serial number; auto-provisions if device doesn't exist; returns a signed device JWT for subsequent updates
 - **Serial-number-based updates** — firmware + mobile app send `serialNumber` (not Mongo `_id`), backend resolves internally
 - **Rich telemetry** — every location fix stores battery %, satellites, hdop, altitude, speed, source (`esp32` | `mobile` | `web`)
 - **Offline queue** — both firmware (NVS) and mobile app (in-memory) queue failed sends; sync via `POST /api/location/batch` on next success
 - **Location history** — `GET /api/location/:deviceId/history?limit=N` for trail visualization
+- **Background mobile tracking** — the Android app runs as a foreground service, survives app kill + device reboot, shows action buttons in the notification tray
 - **Custom backend URL** — caregivers can change the backend URL at runtime via Profile → Backend Settings (stored in localStorage)
 - **Monochrome dark mode** — pure grayscale palette (no hue anywhere), DejaVu Sans Mono everywhere, sharp 0px corners, corner-bracket frames, telemetry-style tabular numbers
 - **Deploy anywhere** — Dockerfile + docker-compose + Vercel/Netlify configs + EAS build profiles included
@@ -91,43 +96,42 @@ make help         # same as above
 backend/
 ├── server.js                    Express bootstrap with graceful shutdown
 ├── routes/
-│   ├── auth.js
+│   ├── auth.js                  POST /verify (Supabase user JWT)
 │   ├── devices.js               incl. /pair and /serial/:serialNumber
 │   └── location.js              /update, /batch, /:deviceId, /:deviceId/history
 ├── controllers/
-│   ├── authController.js
+│   ├── authController.js        profile lookup from Supabase `profiles`
 │   ├── deviceController.js      incl. pairDevice, getDeviceBySerial
 │   └── locationController.js    incl. batchUpdate, getLocationHistory
 ├── middleware/
-│   ├── auth.js                  verifyFirebaseToken (now accepts device JWTs)
+│   ├── auth.js                  verifies device JWTs + Supabase user JWTs (JWKS/HS256)
 │   └── validation.js            all express-validator schemas
-├── models/
-│   ├── Device.js                added pairingSecret, lastSeen
-│   └── Location.js              added satellites, hdop, altitude, speed, battery, source, raw
-├── utils/
-│   └── deviceTokens.js          JWT issue/verify for devices
 ├── config/
 │   ├── demoMode.js              in-memory store with chainable find/limit
-│   ├── db.js
-│   └── firebase.js
+│   └── supabase.js              service-role + anon Supabase clients
+├── utils/
+│   └── deviceTokens.js          JWT issue/verify for devices (pairing secret signed)
+├── supabase/
+│   └── schema.sql               tables + RLS + demo seed (run in Supabase)
+├── models/                      (compat stub — data layer is Supabase JS client)
 └── Dockerfile                   multi-stage build, healthcheck, tini
 ```
 
 ```
 frontend/
 ├── src/
-│   ├── App.jsx
-│   ├── pages/                   Login, Dashboard, MapPage, DeviceDetails, DevicePublic, Profile
+│   ├── App.jsx                  routes: Login, Dashboard, /device/:id, /d/:id (public), Map, Profile
+│   ├── pages/                   Login, Dashboard, DeviceDetails, DevicePublic, MapPage, Profile
 │   ├── components/              Header, Sidebar, BottomNav, DeviceCard, StatCard, AddDeviceModal,
 │   │                            MapView, QRScanner, ErrorBoundary
-│   ├── hooks/                   useDevices, useLocation (uses real backend, falls back to mock)
+│   ├── hooks/                   useDevices, useLocation (real backend + mock fallback)
 │   ├── services/
-│   │   ├── api.js               axios + all v2 endpoints
-│   │   ├── backendConfig.js     runtime URL override
-│   │   ├── mockData.js          fallback data
-│   │   └── firebase.js
-│   ├── context/AuthContext.jsx
-│   ├── styles/theme             in index.css
+│   │   ├── api.js               axios + all v3 endpoints
+│   │   ├── backendConfig.js     runtime URL override (localStorage)
+│   │   ├── supabase.js          browser Supabase client (anon key, RLS-protected)
+│   │   └── mockData.js          fallback data
+│   ├── context/AuthContext.jsx  Supabase auth (login/signup/logout, demo fallback)
+│   ├── utils/constants.js
 │   └── index.css                monochrome dark-mode tokens
 ├── Dockerfile                   nginx-served SPA
 ├── netlify.toml
@@ -139,16 +143,22 @@ frontend/
 ```
 mobile/
 ├── app/                         Expo Router file-based routes
-│   ├── _layout.tsx             root layout
+│   ├── _layout.tsx             root layout (+ tracking bootstrap on boot)
 │   ├── index.tsx               pairing screen
-│   ├── paired.tsx              tracker screen
+│   ├── paired.tsx              tracker screen (live status feed)
 │   └── settings.tsx            settings screen
 ├── src/
 │   ├── components/             BracketCard, StatusPill
-│   ├── services/               api.ts, gps.ts, storage.ts
+│   ├── services/
+│   │   ├── api.ts              pair, sendFix, syncBatch, pingBackend
+│   │   ├── backgroundTask.ts   expo-task-manager location task + offline queue
+│   │   ├── gps.ts              expo-location wrappers
+│   │   ├── notifications.ts    alert channels + notifications
+│   │   ├── powerManagement.ts  wake lock + battery monitoring
+│   │   └── storage.ts          SecureStore + AsyncStorage + tracking state
 │   └── styles/theme.ts         monochrome palette
-├── assets/                     icon, splash, favicon
-├── app.json                     Expo config (Android permissions)
+├── assets/                     icon, adaptive-icon, splash, favicon, notification-icon
+├── app.json                     Expo config (Android permissions, plugins)
 ├── eas.json                     EAS build profiles (preview=APK, production=AAB)
 └── tsconfig.json
 ```
@@ -157,11 +167,11 @@ mobile/
 firmware/
 ├── src/
 │   ├── tagzheimer_firmware.ino main sketch
-│   ├── config.h                 edit for your deployment
-│   ├── secrets.example.h       copy to secrets.h
+│   ├── config.h                 edit for your deployment (SERIAL_NUMBER, BACKEND_URL)
+│   ├── secrets.example.h       copy to secrets.h (WiFi creds)
 │   ├── gps_handler.{h,cpp}     NEO-6M NMEA parsing
 │   ├── wifi_manager.{h,cpp}     WiFi connect/disconnect
-│   ├── backend_client.{h,cpp}   pair + send with token in NVS
+│   ├── backend_client.{h,cpp}   pair + send with token in NVS, offline queue
 │   ├── status_led.{h,cpp}
 │   └── power_manager.{h,cpp}    battery + deep sleep
 ├── docs/wiring.md
@@ -171,23 +181,23 @@ firmware/
 ## Testing
 
 ```bash
-make test-backend       # 9 positive + 3 negative tests against demo-mode backend
-make test-frontend      # vite build, ~150 modules
-make test-mobile        # TypeScript check
-make test-mobile-bundle # Expo Android bundle
+make test-frontend       # vite production build
+make test-mobile         # TypeScript check (tsc --noEmit)
+make test-mobile-bundle  # Expo Android bundle export
+make test-backend        # backend endpoint tests (needs scripts/test_backend.sh, not checked in)
 ```
 
-All tests must pass before any release.
+Note: `make test-backend` points at a test script that lives outside this repo (`scripts/test_backend.sh`). Pull it in (or run the API manually against `DEMO_MODE=true`) before relying on it.
 
 ## Documentation
 
 - [`backend/README.md`](./backend/README.md) — API reference + pairing flow diagram
-- [`frontend/README.md`](./frontend/README.md) — component structure + theming
-- [`mobile/README.md`](./mobile/README.md) — Expo Go quickstart + APK build steps
+- [`frontend/README.md`](./frontend/README.md) — pages, components, theming, auth
+- [`mobile/README.md`](./mobile/README.md) — Expo Go quickstart + background tracking + APK build steps
 - [`firmware/README.md`](./firmware/README.md) — wiring guide + flash instructions
 - [`firmware/docs/wiring.md`](./firmware/docs/wiring.md) — pin map + ASCII schematic
-- [`DEPLOY.md`](./DEPLOY.md) — full deployment guide (Docker, Fly.io, Railway, Render, Vercel, Netlify, EAS, Arduino)
-- [`worklog.md`](./worklog.md) — multi-agent worklog (history of how this was built)
+- [`ANDROID_BUILD.md`](./ANDROID_BUILD.md) — building the APK/AAB (Expo Go / EAS / local)
+- [`DEPLOY.md`](./DEPLOY.md) — full deployment guide (Supabase, Docker, Fly.io, Railway, Render, Vercel, Netlify, EAS, Arduino)
 
 ## License
 

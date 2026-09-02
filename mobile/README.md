@@ -83,7 +83,7 @@ Same as before — see the "Quick start" section below. The new background featu
 3. **Install app dependencies**:
    ```bash
    cd mobile
-   npm install
+   npm install --legacy-peer-deps
    ```
 
 4. **Start the Expo dev server**:
@@ -174,11 +174,15 @@ mobile/
 │   │   └── StatusPill.tsx       ← ONLINE / OFFLINE chip
 │   ├── services/
 │   │   ├── api.ts               ← pair(), sendFix(), syncBatch(), pingBackend()
-│   │   ├── gps.ts               ← expo-location wrappers
-│   │   └── storage.ts           ← SecureStore + AsyncStorage for config
+│   │   ├── backgroundTask.ts    ← expo-task-manager LOCATION + SYNC tasks, offline queue,
+│   │   │                          start/pause/resume/stop, status pub/sub, boot bootstrap
+│   │   ├── gps.ts               ← expo-location wrappers (permissions, one-shot, watch)
+│   │   ├── notifications.ts     ← alert channels + one-shot notifications
+│   │   ├── powerManagement.ts   ← wake lock during sends + battery state
+│   │   └── storage.ts           ← SecureStore (token) + AsyncStorage (config + tracking state)
 │   └── styles/
 │       └── theme.ts             ← monochrome dark palette + shared styles
-├── assets/                      ← icons + splash (PNG)
+├── assets/                      ← icon, adaptive-icon, splash, favicon, notification-icon (PNG)
 ├── app.json                     ← Expo config (Android permissions, plugins)
 ├── package.json
 ├── tsconfig.json
@@ -207,15 +211,17 @@ To find your laptop's LAN IP:
 
 ---
 
-## Background location (for production)
+## Background location
 
-This app sends fixes **only while it's in the foreground** by default. For real-world tracking, you'd want background updates too — that's a separate permission on Android and requires:
+Since v2.1 the app **does** run as a real background tracker — no need to keep the app open:
 
-1. Adding `expo-task-manager` and `expo-background-fetch` (already in `package.json`)
-2. Defining a background task that calls `sendFix` on an interval
-3. Requesting `ACCESS_BACKGROUND_LOCATION` permission (already declared in `app.json`)
+1. **Foreground service** — `startTracking()` registers an `expo-task-manager` LOCATION task with Android's `locationUpdatesAsync` foreground service. A persistent notification with your serial appears in the tray.
+2. **Survives app kill** — swiping the app away doesn't stop the task.
+3. **Survives reboot** — `bootstrapTracking()` (called from the root layout) re-registers the task on app launch if it was running before.
+4. **Periodic sync fallback** — a `SYNC_TASK` (`expo-background-fetch`, ~every 15 min OS-controlled) runs a tracking cycle if the location task didn't fire.
+5. **Offline queue** — failed sends are held in memory and flushed through `POST /api/location/batch` on the next successful send.
 
-The current implementation skips this to keep the demo simple — you'd want a real background task for a deployed patient tracker. PRs welcome.
+Android keeps the app alive, so make sure the user disables battery optimization for this app (there's a helper on the paired screen; full instructions in `powerManagement.ts`). The background location permission ("Allow all the time") is requested on first **START TRACKING**.
 
 ---
 
@@ -227,7 +233,8 @@ The current implementation skips this to keep the demo simple — you'd want a r
 | `Pairing failed (401)` | Token mismatch — in demo mode the backend should accept `Bearer mock-token`. Verify `DEMO_MODE=true` is set. |
 | `No GPS fix` | Go outside, or wait up to 30s for cold-start. Check that location is enabled in Android settings. |
 | `PERMISSION REQUIRED` screen | Tap "GRANT PERMISSION" — Android should pop the location permission dialog. |
-| App closes when you switch away | Background updates aren't implemented in this demo — keep the app in foreground while testing |
+| App stops sending when you swipe it away | Check the battery-optimization helper on the paired screen — Android may be force-stopping the app. Re-grant "Allow all the time" for background location. |
+| `Tracking` notification disappeared | The foreground service stopped (task unregistered). Tap START TRACKING again, or reboot-pair via Settings → check tracking state was saved |
 | `Metro bundler crashed` | Run `npx expo start --clear` to wipe the cache |
 | Phone won't scan Expo QR code | Use the camera app, or type the URL into Expo Go manually |
 
