@@ -1,14 +1,14 @@
 # Multi-stage build for the Tagzheimer frontend — Bun install + Vite build, served by nginx.
 #
-# Bun install is ~10× faster than npm, and the oven/bun:1.1 image is smaller
+# Bun install is ~10× faster than npm, and the oven/bun image is smaller
 # than node:20-alpine.
 
 # === Stage 1: build ===
-FROM oven/bun:1.1 AS build
+FROM oven/bun:1.4 AS build
 WORKDIR /app
 
 # Install deps
-COPY package.json bun.lockb* ./
+COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
 
 # Copy source

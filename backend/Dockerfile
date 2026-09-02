@@ -3,7 +3,7 @@
 # Bun image is ~150 MB (vs ~250 MB for node:20-alpine) and boots faster.
 # Bun also handles the install step itself, no separate npm step.
 
-FROM oven/bun:1.1 AS runtime
+FROM oven/bun:1.4 AS runtime
 
 # tini for proper signal handling (graceful shutdown on SIGTERM)
 # curl for the Docker HEALTHCHECK
@@ -13,7 +13,7 @@ RUN apk add --no-cache tini curl
 WORKDIR /app
 
 # Copy just the manifest first for layer caching
-COPY package.json bun.lockb* ./
+COPY package.json bun.lock ./
 
 # Install production deps
 RUN bun install --frozen-lockfile --production
