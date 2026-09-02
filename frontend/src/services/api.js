@@ -59,6 +59,7 @@ export const devicesAPI = {
   getBySerial: (serialNumber) => api.get(`/api/devices/serial/${encodeURIComponent(serialNumber)}`),
   create:     (data) => api.post('/api/devices', data),
   pair:       (data) => api.post('/api/devices/pair', data),
+  claim:      (id) => api.post(`/api/devices/${id}/claim`),
   delete:     (id) => api.delete(`/api/devices/${id}`),
 };
 

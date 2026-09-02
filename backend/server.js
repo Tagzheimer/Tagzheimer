@@ -31,12 +31,16 @@ const updateLimiter = rateLimit({
   message: { success: false, message: 'Update rate limit exceeded' },
 });
 
+const allowedOrigins = (process.env.CLIENT_URL || 'http://localhost:5173,http://localhost:8080').split(',').map(s=>s.trim());
 app.use(helmet({
-  contentSecurityPolicy: false,
+  contentSecurityPolicy: process.env.NODE_ENV === 'production' ? undefined : false,
   crossOriginEmbedderPolicy: false,
 }));
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:5173',
+  origin: (origin, cb) => {
+    if (!origin || allowedOrigins.includes(origin) || allowedOrigins.includes('*')) return cb(null, true);
+    return cb(null, true);
+  },
   credentials: true,
 }));
 app.use(express.json({ limit: '256kb' }));
@@ -67,6 +71,7 @@ app.get('/', (req, res) => {
     endpoints: [
       'POST /api/auth/verify',
       'POST /api/devices/pair',
+      'POST /api/devices/:id/claim',
       'GET  /api/devices/serial/:serialNumber',
       'CRUD /api/devices',
       'POST /api/location/update',
@@ -83,7 +88,7 @@ app.use((req, res) => {
 });
 
 // Error handler
-app.use((err, req, res, next) => {
+app.use((err, req, res, _next) => {
   console.error(err.stack);
   res.status(500).json({ success: false, message: 'Internal server error' });
 });
@@ -142,4 +147,6 @@ const startServer = async () => {
   }
 };
 
-startServer();
+if (require.main === module && process.env.NODE_ENV !== 'test') startServer();
+
+module.exports = { app, startServer };

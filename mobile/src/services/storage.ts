@@ -47,7 +47,7 @@ export interface TrackingStatus {
 
 export const DEFAULTS: Omit<TrackerConfig, 'deviceId' | 'accessToken'> = {
   serial:   '',
-  backend:  'http://10.0.2.2:5000',
+  backend:  'http://10.0.2.2:5000'.replace(/\/+$/, ''),
   interval: 60,
 };
 
@@ -90,7 +90,7 @@ export async function savePairing(deviceId: string, accessToken: string, serial:
 }
 
 export async function saveBackend(backend: string) {
-  await AsyncStorage.setItem(KEYS.backend, backend);
+  await AsyncStorage.setItem(KEYS.backend, backend.trim().replace(/\/+$/, ''));
 }
 
 export async function saveInterval(intervalSec: number) {

@@ -48,9 +48,14 @@ export function useDevices() {
   }, [fetchDevices]);
 
   const addDevice = async (deviceData) => {
-    const { data } = await devicesAPI.create(deviceData);
-    setDevices((prev) => [data, ...prev]);
-    return data;
+    try {
+      const { data } = await devicesAPI.create(deviceData);
+      setDevices((prev) => [data, ...prev]);
+      return data;
+    } catch (err) {
+      const msg = err?.response?.data?.message || err?.response?.data?.errors?.[0]?.message || err.message;
+      throw new Error(msg);
+    }
   };
 
   const deleteDevice = async (id) => {

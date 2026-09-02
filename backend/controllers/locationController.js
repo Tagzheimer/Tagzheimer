@@ -11,7 +11,7 @@ function getTable(name) {
   return { demo: false, supabase: getServiceClient().from(TABLE_NAMES[name] || name) };
 }
 
-function camelToDeviceId(id) {
+function _camelToDeviceId(id) {
   return id;
 }
 
@@ -228,10 +228,42 @@ const batchUpdate = async (req, res) => {
   }
 };
 
+async function assertDeviceOwnership(deviceId, user) {
+  if (user?.isDevice) {
+    if (String(user.deviceId) !== String(deviceId)) {
+      const err = new Error('Token is not valid for this device');
+      err.status = 403;
+      throw err;
+    }
+    return;
+  }
+  const deviceTable = getTable('Device');
+  let device = null;
+  if (deviceTable.demo) {
+    const found = deviceTable.store.findById(deviceId);
+    device = found ? await found.lean() : null;
+  } else {
+    const { data } = await deviceTable.supabase.select('id, owner_id').eq('id', deviceId).maybeSingle();
+    device = data;
+  }
+  if (!device) {
+    const err = new Error('Device not found');
+    err.status = 404;
+    throw err;
+  }
+  const ownerId = device.owner_id ?? device.ownerId;
+  if (String(ownerId) !== String(user.uid)) {
+    const err = new Error('Forbidden — you do not own this device');
+    err.status = 403;
+    throw err;
+  }
+}
+
 // === GET /api/location/:deviceId — latest fix (legacy contract) ===
 const getCurrentLocation = async (req, res) => {
   try {
     const { deviceId } = req.params;
+    await assertDeviceOwnership(deviceId, req.user);
     const table = getTable('Location');
 
     let row;
@@ -262,6 +294,7 @@ const getCurrentLocation = async (req, res) => {
       timestamp: row.timestamp,
     });
   } catch (error) {
+    if (error.status) return res.status(error.status).json({ success: false, message: error.message });
     console.error('Error in getCurrentLocation:', error.message);
     return res.status(500).json({ success: false, message: 'Server error' });
   }
@@ -271,6 +304,7 @@ const getCurrentLocation = async (req, res) => {
 const getLocationHistory = async (req, res) => {
   try {
     const { deviceId } = req.params;
+    await assertDeviceOwnership(deviceId, req.user);
     const limit = Math.min(parseInt(req.query.limit || '50', 10), 500);
 
     const table = getTable('Location');
@@ -306,6 +340,7 @@ const getLocationHistory = async (req, res) => {
       })),
     });
   } catch (error) {
+    if (error.status) return res.status(error.status).json({ success: false, message: error.message });
     console.error('Error in getLocationHistory:', error.message);
     return res.status(500).json({ success: false, message: 'Server error' });
   }

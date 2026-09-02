@@ -38,6 +38,10 @@ function authHeaders(accessToken: string): Record<string, string> {
   };
 }
 
+function normalizeBase(url: string): string {
+  return url.trim().replace(/\/+$/, '');
+}
+
 function demoHeaders(): Record<string, string> {
   return {
     'Content-Type': 'application/json',
@@ -50,7 +54,7 @@ export async function pair(
   serialNumber: string,
   opts?: { name?: string; patientName?: string; notes?: string },
 ): Promise<PairResponse> {
-  const url = `${backendUrl}/api/devices/pair`;
+  const url = `${normalizeBase(backendUrl)}/api/devices/pair`;
   const res = await fetch(url, {
     method: 'POST',
     headers: demoHeaders(),
@@ -91,7 +95,7 @@ export async function sendFix(
   };
 
   try {
-    const res = await fetch(`${config.backend}/api/location/update`, {
+    const res = await fetch(`${normalizeBase(config.backend)}/api/location/update`, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
@@ -134,7 +138,7 @@ export async function syncBatch(
   };
 
   try {
-    const res = await fetch(`${config.backend}/api/location/batch`, {
+    const res = await fetch(`${normalizeBase(config.backend)}/api/location/batch`, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
@@ -152,7 +156,7 @@ export async function syncBatch(
 
 export async function pingBackend(backendUrl: string): Promise<{ ok: boolean; message: string }> {
   try {
-    const res = await fetch(`${backendUrl}/api/health`, { method: 'GET' });
+    const res = await fetch(`${normalizeBase(backendUrl)}/api/health`, { method: 'GET' });
     if (res.ok) {
       const data = await res.json();
       return { ok: true, message: data.message || 'OK' };

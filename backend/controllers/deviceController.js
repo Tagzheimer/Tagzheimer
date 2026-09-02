@@ -92,7 +92,14 @@ const getDeviceById = async (req, res) => {
     if (!row) {
       return res.status(404).json({ success: false, message: 'Device not found' });
     }
-    return res.json(dbRowToDevice(row));
+    const device = dbRowToDevice(row);
+    if (!req.user.isDevice && String(device.ownerId) !== String(req.user.uid)) {
+      return res.status(403).json({ success: false, message: 'Forbidden — you do not own this device' });
+    }
+    if (req.user.isDevice && String(device._id) !== String(req.user.deviceId)) {
+      return res.status(403).json({ success: false, message: 'Token is not valid for this device' });
+    }
+    return res.json(device);
   } catch (error) {
     console.error('Error in getDeviceById:', error.message);
     return res.status(500).json({ success: false, message: 'Server error' });
@@ -275,11 +282,56 @@ const pairDevice = async (req, res) => {
   }
 };
 
+const claimDevice = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const table = getTable('Device');
+    let row;
+    if (table.demo) {
+      const found = table.store.findById(id);
+      row = found ? await found.lean() : null;
+    } else {
+      const { data, error } = await table.supabase.select('*').eq('id', id).maybeSingle();
+      if (error) throw error;
+      row = data;
+    }
+    if (!row) return res.status(404).json({ success: false, message: 'Device not found' });
+    const device = dbRowToDevice(row);
+    if (device.ownerId) {
+      return res.status(409).json({ success: false, message: 'Device already claimed' });
+    }
+    if (table.demo) {
+      await table.store.findByIdAndUpdate(id, { ownerId: req.user.uid });
+      const updated = await table.store.findById(id).lean();
+      return res.json({ success: true, device: dbRowToDevice(updated) });
+    }
+    const { data: updated, error } = await table.supabase.update({ owner_id: req.user.uid }).eq('id', id).select().single();
+    if (error) throw error;
+    return res.json({ success: true, device: dbRowToDevice(updated) });
+  } catch (error) {
+    console.error('Error in claimDevice:', error.message);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
 // === DELETE /api/devices/:id ===
 const deleteDevice = async (req, res) => {
   try {
     const { id } = req.params;
     const table = getTable('Device');
+    let ownershipRow;
+    if (table.demo) {
+      const found = table.store.findById(id);
+      ownershipRow = found ? await found.lean() : null;
+    } else {
+      const { data } = await table.supabase.select('owner_id').eq('id', id).maybeSingle();
+      ownershipRow = data;
+    }
+    if (!ownershipRow) return res.status(404).json({ success: false, message: 'Device not found' });
+    const ownerId = ownershipRow.owner_id ?? ownershipRow.ownerId;
+    if (ownerId && String(ownerId) !== String(req.user.uid) && !req.user.isDevice) {
+      return res.status(403).json({ success: false, message: 'Forbidden — you do not own this device' });
+    }
 
     if (table.demo) {
       const found = table.store.findById(id);
@@ -306,5 +358,6 @@ module.exports = {
   getDeviceBySerial,
   createDevice,
   pairDevice,
+  claimDevice,
   deleteDevice,
 };

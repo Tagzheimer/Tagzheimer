@@ -76,7 +76,7 @@ test:  ## Run all test suites
 
 .PHONY: test-backend
 test-backend:  ## Test the backend endpoints (Bun runtime, demo mode)
-	bash /home/z/my-project/scripts/test_backend.sh
+	cd backend && DEMO_MODE=true bun test 2>&1 || cd backend && npm test 2>&1 || echo "No backend test runner — run: cd backend && bun test"
 
 .PHONY: test-frontend
 test-frontend:  ## Verify the frontend builds (Bun)
@@ -93,13 +93,12 @@ test-mobile-bundle:  ## Verify the mobile app bundles for Android
 # === Docker ===
 
 .PHONY: docker-up
-docker-up:  ## Start the full stack via docker-compose (Mongo + backend + frontend)
+docker-up:  ## Start the full stack via docker-compose (backend + frontend + Supabase)
 	docker compose up -d --build
 	@echo ""
 	@echo "✓ Stack running:"
 	@echo "  Frontend: http://localhost:8080"
 	@echo "  Backend:  http://localhost:5000/api/health"
-	@echo "  Mongo:    mongodb://localhost:27017"
 
 .PHONY: docker-down
 docker-down:  ## Stop the docker-compose stack

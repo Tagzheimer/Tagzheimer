@@ -1,5 +1,4 @@
 const MONGO_ID = (n) => `00000000000000000000000${n}`.slice(-24);
-const { generatePairingSecret } = require('../utils/deviceTokens');
 
 const seedDevices = [
   {

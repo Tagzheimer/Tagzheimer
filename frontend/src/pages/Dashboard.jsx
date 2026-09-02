@@ -6,7 +6,7 @@ import AddDeviceModal from '../components/AddDeviceModal';
 import { useDevices } from '../hooks/useDevices';
 
 export default function Dashboard() {
-  const { devices, loading, totalDevices, activeDevices, offlineDevices, addDevice } = useDevices();
+  const { devices, loading, error, usingMockData, totalDevices, activeDevices, offlineDevices, addDevice } = useDevices();
   const [showModal, setShowModal] = useState(false);
 
   const handleAddDevice = async (data) => {
@@ -30,6 +30,12 @@ export default function Dashboard() {
       />
 
       <div className="flex-1 overflow-y-auto px-4 md:px-0 pt-6 md:pt-10 pb-24 md:pb-10">
+        {usingMockData && (
+          <div className="mb-6 border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-[13px] text-amber-300 flex items-start gap-2">
+            <span>⚠</span>
+            <span>Backend unreachable — showing demo data. {error ? `(${error})` : ''} Check Profile → Backend Settings or VITE_API_URL.</span>
+          </div>
+        )}
         <div className="flex items-end justify-between mb-8 md:mb-10">
           <div>
             <div className="label-mono mb-2">Overview</div>

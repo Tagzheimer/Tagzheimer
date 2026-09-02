@@ -62,7 +62,7 @@ async function verifyDeviceToken(token, { findByDeviceId } = {}) {
   // First try global secret (legacy/demo)
   try {
     return jwt.verify(token, getJwtSecret());
-  } catch (globalErr) {
+  } catch (_globalErr) {
     // fall through and try per-device secret
   }
 

@@ -126,7 +126,7 @@ const verifyToken = async (req, res, next) => {
         };
         return next();
       }
-    } catch (deviceErr) {
+    } catch (_deviceErr) {
       // Not a device token — fall through to user JWT verification.
     }
 

@@ -52,9 +52,13 @@ function getJwtSecret() {
   return SUPABASE_JWT_SECRET;
 }
 
+function isSupabaseConfigured() {
+  return !!(SUPABASE_URL && SUPABASE_SERVICE_KEY && SUPABASE_JWT_SECRET);
+}
+
 module.exports = {
   getServiceClient,
   getAnonClient,
   getJwtSecret,
-  isSupabaseConfigured: () => !!(SUPABASE_URL && (SUPABASE_SERVICE_KEY || SUPABASE_ANON_KEY)),
+  isSupabaseConfigured,
 };

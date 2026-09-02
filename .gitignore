@@ -1,5 +1,6 @@
 node_modules
 .env
+.env.local
 *.pem
 dist
 dist-ssr
@@ -20,18 +21,46 @@ dist-ssr
 frontend/dist
 frontend/dist-ssr
 backend/dist
+backend/coverage
+frontend/coverage
 
 # Dependencies (keep lockfiles, ignore installed modules)
 backend/node_modules
 frontend/node_modules
 mobile/node_modules
 mobile/.expo
+mobile/.expo-shared
 mobile/dist
+mobile/android
+mobile/ios
+mobile/*.jks
+mobile/*.p8
+mobile/*.p12
+mobile/*.keystore
+mobile/*.mobileprovision
+
+# Expo + EAS
+.eas
+.expo
+
+# Android / APK
+*.apk
+*.aab
+*.hprof
+local.properties
 
 # Runtime / test artifacts
 .playwright-mcp/
 device-details.png
 coverage
+.nyc_output
+junit.xml
 
 # OS
 Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# SDK
+C:/Android
+.gradle
