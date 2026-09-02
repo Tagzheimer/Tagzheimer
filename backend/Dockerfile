@@ -8,7 +8,9 @@ FROM oven/bun:1.4 AS runtime
 # tini for proper signal handling (graceful shutdown on SIGTERM)
 # curl for the Docker HEALTHCHECK
 USER root
-RUN apk add --no-cache tini curl
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends tini curl && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -22,8 +24,8 @@ RUN bun install --frozen-lockfile --production
 COPY . .
 
 # Create a non-root user for security
-RUN addgroup -S tagz && \
-    adduser -S -G tagz -h /app tagz && \
+RUN groupadd --system tagz && \
+    useradd --system --gid tagz --home-dir /app --no-create-home tagz && \
     chown -R tagz:tagz /app
 USER tagz
 
@@ -37,5 +39,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 EXPOSE 5000
 
 # Use tini as init process for proper signal forwarding
-ENTRYPOINT ["/sbin/tini", "--"]
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["bun", "run", "server.js"]
