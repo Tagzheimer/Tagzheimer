@@ -25,7 +25,7 @@ Use this if you just want to test the app on your phone in 5 minutes. No APK is 
 
 ### 1.2 On your dev machine:
 ```bash
-unzip tagzheimer-v2.zip -d tagzheimer
+git clone https://github.com/Tagzheimer/Tagzheimer.git tagzheimer   # or extract a repo copy
 cd tagzheimer/mobile
 npm install --legacy-peer-deps
 npx expo start
