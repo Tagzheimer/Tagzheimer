@@ -4,13 +4,16 @@ const { getDevices, getDeviceById, getDeviceBySerial, createDevice, pairDevice, 
 const { verifyFirebaseToken } = require('../middleware/auth');
 const { validateCreateDevice, validateDeviceId, validateSerial, validatePairDevice } = require('../middleware/validation');
 
-router.use(verifyFirebaseToken);
-
 // === Pairing ===
-// POST /api/devices/pair — easy pairing by serial number
-//   Body: { serialNumber, name?, patientName?, notes? }
-//   Returns: { deviceId, accessToken, ... }
+// POST /api/devices/pair — permissionless / public-safe device pairing.
+// Firmware and the mobile app have no user JWT at pairing time (they send a
+// placeholder `Bearer mock-token`), so this route must NOT require auth.
+// The serial number doubles as the device's credential; new devices are
+// provisioned ownerless (owner_id null) and claimed later by a caregiver.
 router.post('/pair', validatePairDevice, pairDevice);
+
+// All other device routes require a verified user token or device JWT.
+router.use(verifyFirebaseToken);
 
 // GET /api/devices/serial/:serialNumber — lookup by serial
 router.get('/serial/:serialNumber', validateSerial, getDeviceBySerial);
