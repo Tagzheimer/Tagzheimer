@@ -9,7 +9,7 @@ import { colors } from '../src/styles/theme';
 import { BracketCard } from '../src/components/BracketCard';
 import { StatusPill } from '../src/components/StatusPill';
 import {
-  loadConfig, clearPairing, loadTrackingStatus,
+  loadConfig, clearPairing, loadTrackingStatus, loadPrefs,
   TrackerConfig, TrackingStatus,
 } from '../src/services/storage';
 import {
@@ -18,7 +18,18 @@ import {
 } from '../src/services/backgroundTask';
 import { withWakeLock, getBatteryState } from '../src/services/powerManagement';
 import { sendFix, GpsFix } from '../src/services/api';
+import * as Battery from 'expo-battery';
 import * as Location from 'expo-location';
+
+function sourceLabel(source?: string | null): string {
+  switch (source) {
+    case 'task': return 'OS FIX · NO RADIO';
+    case 'cached': return 'CACHED · NO RADIO';
+    case 'gps': return 'GPS FIX';
+    case 'gps-stale': return 'CACHED (GPS TIMEOUT)';
+    default: return '—';
+  }
+}
 
 function fmtTime(ts: number | null): string {
   if (!ts) return '—';
@@ -40,39 +51,58 @@ export default function TrackerScreen() {
   const [config, setConfig] = useState<TrackerConfig | null>(null);
   const [status, setStatus] = useState<TrackingStatus | null>(null);
   const [battery, setBattery] = useState<{ level: number; isCharging: boolean } | null>(null);
+  const [batteryThreshold, setBatteryThreshold] = useState(20);
   const [sendingNow, setSendingNow] = useState(false);
 
-  // Load config + status on focus
+  // Load config + status on focus.
+  // Battery is event-driven (level-change listener, no polling) and the
+  // effect returns a real cleanup — the old 30s interval leaked a timer
+  // on every focus and kept waking the device for no reason.
   useFocusEffect(useCallback(() => {
+    let cancelled = false;
+    let cleanup: (() => void) | undefined;
     (async () => {
       const cfg = await loadConfig();
+      if (cancelled) return;
       if (!cfg.accessToken || !cfg.deviceId) {
         router.replace('/');
         return;
       }
       setConfig(cfg);
       const currentStatus = await loadTrackingStatus();
+      if (cancelled) return;
       setStatus(currentStatus);
+      const prefs = await loadPrefs();
+      if (cancelled) return;
+      setBatteryThreshold(prefs.batteryThreshold);
 
       // Subscribe to status updates from background task
       const unsubscribe = subscribeToStatus((next) => {
-        setStatus(next);
+        if (!cancelled) setStatus(next);
       });
 
-      const bat = await getBatteryState();
+      const bat = await getBatteryState(prefs.batteryThreshold);
+      if (cancelled) {
+        unsubscribe();
+        return;
+      }
       setBattery({ level: bat.level, isCharging: bat.isCharging });
 
-      // Poll battery every 30s
-      const batTimer = setInterval(async () => {
-        const b = await getBatteryState();
-        setBattery({ level: b.level, isCharging: b.isCharging });
-      }, 30000);
+      // Event-driven battery updates — fires only when the level changes.
+      const batSub = Battery.addBatteryLevelListener(async () => {
+        const b = await getBatteryState(prefs.batteryThreshold);
+        if (!cancelled) setBattery({ level: b.level, isCharging: b.isCharging });
+      });
 
-      return () => {
+      cleanup = () => {
         unsubscribe();
-        clearInterval(batTimer);
+        batSub.remove();
       };
     })();
+    return () => {
+      cancelled = true;
+      cleanup?.();
+    };
   }, []));
 
   // === Actions ===
@@ -109,8 +139,13 @@ export default function TrackerScreen() {
     setSendingNow(true);
     await withWakeLock(async () => {
       try {
+        const prefs = await loadPrefs();
+        const oneShotAccuracy =
+          prefs.accuracy === 'saver' ? Location.Accuracy.Low
+          : prefs.accuracy === 'precise' ? Location.Accuracy.High
+          : Location.Accuracy.Balanced;
         const loc = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,  // ~10m accuracy, much less battery drain than BestForNavigation
+          accuracy: oneShotAccuracy,
         });
         const fix: GpsFix = {
           latitude:  loc.coords.latitude,
@@ -120,7 +155,7 @@ export default function TrackerScreen() {
           altitude:  loc.coords.altitude  ?? null,
           speed:      loc.coords.speed      ?? null,
         };
-        const bat = await getBatteryState();
+        const bat = await getBatteryState(batteryThreshold);
         const result = await sendFix(config, fix, bat.level);
         if (result.success) {
           Alert.alert('Sent', 'GPS fix sent to backend');
@@ -195,6 +230,14 @@ export default function TrackerScreen() {
                 {fmtTime(status.lastFixAt)}
               </Text>
             </View>
+            {status.lastFixSource ? (
+              <View style={{ flexDirection: 'row', marginBottom: 8 }}>
+                <Text style={[styles.label, { flex: 1 }]}>FIX SOURCE</Text>
+                <Text style={[styles.mono, { flex: 1.5, textAlign: 'right', fontSize: 11, color: colors.ink3 }]}>
+                  {sourceLabel(status.lastFixSource)}
+                </Text>
+              </View>
+            ) : null}
             <View style={{ flexDirection: 'row', marginBottom: 8 }}>
               <Text style={[styles.label, { flex: 1 }]}>LAST SEND</Text>
               <Text style={[styles.value, { flex: 1.5, textAlign: 'right', color: status.lastSendOk === false ? colors.ink3 : colors.ink }]}>
@@ -235,7 +278,7 @@ export default function TrackerScreen() {
       <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
         <BracketCard style={{ flex: 1, padding: 16 }}>
           <Text style={styles.label}>BATTERY</Text>
-          <Text style={[styles.h2, { marginTop: 8, fontSize: 24, color: battery && battery.level < 20 ? colors.ink3 : colors.ink }]}>
+          <Text style={[styles.h2, { marginTop: 8, fontSize: 24, color: battery && battery.level < batteryThreshold ? colors.ink3 : colors.ink }]}>
             {battery?.level ?? '—'}%
           </Text>
           {battery?.isCharging && (
@@ -328,6 +371,7 @@ export default function TrackerScreen() {
           • The tracker runs as an Android foreground service{'\n'}
           • A persistent notification stays in the tray while tracking{'\n'}
           • GPS fixes are sent every {config.interval}s{'\n'}
+          • Efficient mode reuses free OS/cached fixes to save battery{'\n'}
           • Failed sends are queued and synced when the backend is reachable{'\n'}
           • The app can be swiped away — tracking continues{'\n'}
           • The notification has PAUSE / RESUME / STOP action buttons

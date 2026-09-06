@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
+const { limiter, updateLimiter } = require('./middleware/rateLimits');
 
 const { isDemoMode, getDemoStore } = require('./config/demoMode');
 const { isSupabaseConfigured, getServiceClient } = require('./config/supabase');
@@ -14,22 +14,11 @@ const locationRoutes = require('./routes/location');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// === Rate limiters ===
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 200,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { success: false, message: 'Too many requests, please try again later' },
-});
-
-const updateLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { success: false, message: 'Update rate limit exceeded' },
-});
+// Behind Fly/Render/nginx/Caddy, req.ip is the proxy unless we trust it —
+// without this, EVERY client shares one rate-limit bucket (single phone
+// behind carrier NAT could 429 the whole user base). One hop by default;
+// set TRUST_PROXY=2 behind stacked proxies (e.g. Cloudflare → Fly).
+app.set('trust proxy', Number.parseInt(process.env.TRUST_PROXY || '1', 10) || 1);
 
 const allowedOrigins = (process.env.CLIENT_URL || 'http://localhost:5173,http://localhost:8080').split(',').map(s=>s.trim());
 app.use(helmet({
@@ -38,8 +27,9 @@ app.use(helmet({
 }));
 app.use(cors({
   origin: (origin, cb) => {
-    if (!origin || allowedOrigins.includes(origin) || allowedOrigins.includes('*')) return cb(null, true);
-    return cb(null, true);
+    if (!origin) return cb(null, true);
+    if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) return cb(null, true);
+    return cb(new Error('CORS: origin not allowed'));
   },
   credentials: true,
 }));
@@ -56,7 +46,7 @@ app.get('/api/health', (req, res) => {
   res.json({
     success: true,
     message: 'Tagzheimer API is running',
-    version: '3.0.0',
+    version: '4.0.0-beta',
     mode: isDemoMode() ? 'demo' : 'production',
     database: isDemoMode() ? 'in-memory' : (isSupabaseConfigured() ? 'supabase' : 'unconfigured'),
     timestamp: new Date().toISOString(),
@@ -66,12 +56,13 @@ app.get('/api/health', (req, res) => {
 app.get('/', (req, res) => {
   res.json({
     name: 'Tagzheimer API',
-    version: '3.0.0',
+    version: '4.0.0-beta',
     docs: '/api/health',
     endpoints: [
       'POST /api/auth/verify',
       'POST /api/devices/pair',
       'POST /api/devices/:id/claim',
+      'POST /api/devices/:id/token',
       'GET  /api/devices/serial/:serialNumber',
       'CRUD /api/devices',
       'POST /api/location/update',
@@ -89,6 +80,12 @@ app.use((req, res) => {
 
 // Error handler
 app.use((err, req, res, _next) => {
+  if (err && (err.type === 'entity.too.large' || err.status === 413)) {
+    return res.status(413).json({ success: false, message: 'Payload too large (max 256kb)' });
+  }
+  if (err && err.message === 'CORS: origin not allowed') {
+    return res.status(403).json({ success: false, message: 'CORS: origin not allowed' });
+  }
   console.error(err.stack);
   res.status(500).json({ success: false, message: 'Internal server error' });
 });
@@ -120,7 +117,7 @@ const startServer = async () => {
     }
 
     server = app.listen(PORT, () => {
-      console.log(`Tagzheimer server v3.0.0 running on port ${PORT}${isDemoMode() ? ' (DEMO MODE)' : ''}`);
+      console.log(`Tagzheimer server v4.0.0-beta running on port ${PORT}${isDemoMode() ? ' (DEMO MODE)' : ''}`);
     });
 
     process.on('SIGTERM', () => {

@@ -10,15 +10,24 @@ export default function QRScanner({ isOpen, onClose }) {
   const handleScan = (detectedCodes) => {
     const code = detectedCodes?.[0];
     if (!code?.rawValue) return;
+    const raw = String(code.rawValue).trim();
     try {
-      const url = new URL(code.rawValue);
-      const match = url.pathname.match(/^\/d\/(.+)/);
-      if (match) {
-        navigate(`/device/${match[1]}`);
+      const url = new URL(raw);
+      const match = url.pathname.match(/^\/d\/([^/?#]+)/);
+      if (match && match[1]) {
+        navigate(`/d/${encodeURIComponent(match[1])}`);
         onClose();
+      } else {
+        setError('QR code is not a Tagzheimer device link');
       }
     } catch {
-      // not a valid URL
+      // Accept a bare device id as fallback (e.g. manually generated QR)
+      if (/^[0-9a-fA-F-]{3,64}$/.test(raw)) {
+        navigate(`/d/${encodeURIComponent(raw)}`);
+        onClose();
+      } else {
+        setError('Unrecognized QR code');
+      }
     }
   };
 
@@ -30,7 +39,7 @@ export default function QRScanner({ isOpen, onClose }) {
     e.preventDefault();
     const id = manualId.trim();
     if (id) {
-      navigate(`/device/${id}`);
+      navigate(`/d/${encodeURIComponent(id)}`);
       onClose();
     }
   };

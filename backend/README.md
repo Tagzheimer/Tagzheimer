@@ -28,7 +28,7 @@ bun run server.js               # or: npm start
 # curl http://localhost:5000/api/health
 ```
 
-In demo mode the backend uses an in-memory store seeded with 4 devices (`TAG-001` through `TAG-004`) and accepts `Bearer mock-token` as auth for everything.
+In demo mode the backend uses an in-memory store seeded with 4 devices (`TAG-001` through `TAG-004`, owned by `demo-user-uuid`) and accepts `Bearer mock-token` as auth for everything. `pair` provisions ownerless rows; claiming rotates the pairing secret and revokes pre-claim tracker tokens.
 
 For production, set `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `SUPABASE_JWT_SECRET` and a strong `JWT_SECRET` (see `supabase/schema.sql` + `.env.example`).
 
@@ -36,6 +36,7 @@ For production, set `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `SUPABASE_JWT_SECRET
 
 1. Create a project at https://supabase.com.
 2. Open **SQL Editor** → paste the contents of `supabase/schema.sql` → **Run**. This creates `profiles`, `devices`, `locations`, the RLS policies, and the trigger that auto-creates a profile row on user signup.
+3. Against a database with REAL rows, run the read-only blocks in `supabase/audit.sql` first (legacy serials, case-variant dupes, out-of-range telemetry, future timestamps, ownerless devices with fixes). The backend tolerates all flagged shapes — the audit just tells you what legacy you carry.
 3. Copy credentials to your `.env`:
 
 | Variable | Source |
@@ -65,12 +66,14 @@ All endpoints require `Authorization: Bearer <token>`. The middleware (`middlewa
 
 | Method | Path | Body / Params | Returns |
 |--------|------|----------------|---------|
-| `POST` | `/api/devices/pair` | `{ serialNumber, name?, patientName?, notes? }` | `{ success, created, deviceId, serialNumber, deviceName, patientName, accessToken }` |
-| `GET` | `/api/devices/serial/:serialNumber` | — | `{ success, device: { id, deviceId, serialNumber, name, status, lastSeen, battery } }` |
-| `GET` | `/api/devices` | — | `[Device]` (owner-scoped) |
-| `POST` | `/api/devices` | `{ name, serialNumber, patientName, notes? }` | `Device` (owner-scoped insert) |
-| `GET` | `/api/devices/:id` | — | `Device` |
-| `DELETE` | `/api/devices/:id` | — | `{ success, message }` |
+| `POST` | `/api/devices/pair` | `{ serialNumber (A-Za-z0-9-_, 3–64), name?, patientName?, notes? }` | `{ success, created, deviceId, serialNumber, deviceName, patientName, accessToken }` (owned serials → `409`; provisions ownerless) |
+| `POST` | `/api/devices/:id/claim` | — | `{ success, device, accessToken }` (atomic, rotates secret, revokes pre-claim tokens) |
+| `POST` | `/api/devices/:id/token` | — | `{ success, deviceId, serialNumber, accessToken }` (owner-only recovery) |
+| `GET` | `/api/devices/serial/:serialNumber` | — | `{ success, device }` (non-owned → `404`, no oracle) |
+| `GET` | `/api/devices` | — | `[Device]` (owner-scoped; device JWT → `403`) |
+| `POST` | `/api/devices` | `{ name, serialNumber, patientName, notes? (≤2000) }` | `Device` (owner-scoped insert; device JWT → `403`; dup serial → `409`) |
+| `GET` | `/api/devices/:id` | — | `Device` (status computed from `lastSeen ≤15min`) |
+| `DELETE` | `/api/devices/:id` | — | `{ success, message }` (owner-only; device JWT → `403`; ownerless → `403 claim first`) |
 
 ### Location
 
@@ -78,8 +81,8 @@ All endpoints require `Authorization: Bearer <token>`. The middleware (`middlewa
 |--------|------|----------------|---------|
 | `POST` | `/api/location/update` | `{ deviceId?, serialNumber?, latitude, longitude, meta? }` | `201 { success, location }` |
 | `POST` | `/api/location/batch` | `{ deviceId?, serialNumber?, fixes: [{ latitude, longitude, timestamp?, meta? }] }` | `201 { success, inserted }` |
-| `GET` | `/api/location/:deviceId` | — | `{ latitude, longitude, timestamp }` (latest) |
-| `GET` | `/api/location/:deviceId/history?limit=50` | — | `{ success, count, locations: [...] }` (max limit 500) |
+| `GET` | `/api/location/:deviceId` | — | `{ success, latitude, longitude, timestamp }` (latest; ownership-enforced) |
+| `GET` | `/api/location/:deviceId/history?limit=50` | — | `{ success, count, locations: [...] }` (strict `limit 1..500` else `400`) |
 
 #### `meta` block (optional, on `/update` and `/batch`)
 
@@ -101,9 +104,13 @@ A top-level `battery` and `source` (outside `meta`) are also accepted.
 
 #### Validation
 
-- `deviceId` accepts either a 24-char Mongo-style hex ID or a UUID (Supabase). `serialNumber` must be 3–64 chars.
+- `deviceId` accepts either a 24-char Mongo-style hex ID or a UUID (Supabase); arrays/objects rejected.
+- `serialNumber` charset (`^[A-Za-z0-9][A-Za-z0-9\-_]*[A-Za-z0-9]$`, 3–64) applies to CREATION only (`pair`/`create`). Lookup and write-by-serial paths accept any string 3–64 so pre-existing prod serials keep working.
+- `notes ≤2000`.
 - Either `deviceId`, `serialNumber`, or a device-JWT caller is required.
-- `latitude` ∈ [-90, 90], `longitude` ∈ [-180, 180]; all `meta` fields are optional and range-checked.
+- `latitude` ∈ [-90, 90], `longitude` ∈ [-180, 180]; all `meta` fields (incl. `accuracy 0..10000`) optional and range-checked on both `/update` and every `fixes[i]` in `/batch`.
+- `timestamp` must not be >5min in the future; oversize bodies (`>256kb`) return `413`.
+- Serial lookups try exact match first, then case-insensitive (safe against case-variant duplicates — exact-case wins).
 
 ## Pairing flow
 
@@ -170,12 +177,13 @@ GET /api/health
 | `PORT` | no | `5000` | HTTP port |
 | `NODE_ENV` | no | — | `development` enables the `mock-token` shortcut |
 | `DEMO_MODE` | no | `false` | `true` uses the in-memory store, skips Supabase entirely |
-| `JWT_SECRET` | yes (prod) | dev fallback | Signs device JWTs — set a strong random string (`openssl rand -hex 32`) |
+| `JWT_SECRET` | yes (prod) | none — fails closed | Signs device JWTs — set a strong random string (`openssl rand -hex 32`). No public fallback in prod. |
 | `SUPABASE_URL` | yes (prod) | — | Supabase project URL |
 | `SUPABASE_ANON_KEY` | yes (prod) | — | anon public key (used by the pairing endpoint) |
 | `SUPABASE_SERVICE_KEY` | yes (prod) | — | service_role key (backend only, bypasses RLS) |
 | `SUPABASE_JWT_SECRET` | yes (prod) | — | verifies legacy HS256 user JWTs |
 | `CLIENT_URL` | no | `http://localhost:5173` | CORS origin for the frontend |
+| `TRUST_PROXY` | no | `1` | Trusted proxy hops for `req.ip` (rate-limit keys). `2` behind stacked proxies — without it all clients share one bucket |
 
 ## File layout
 

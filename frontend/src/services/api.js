@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { getBackendUrl } from './backendConfig';
+import { getSettings, DEFAULT_SETTINGS } from './settings';
 
 /**
  * Axios instance for the Tagzheimer backend.
@@ -15,9 +16,14 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
-// Resolve baseURL at request time so Settings changes apply instantly
+// Resolve baseURL + timeout at request time so Settings changes apply instantly
 api.interceptors.request.use((config) => {
   config.baseURL = getBackendUrl();
+  try {
+    config.timeout = (getSettings().network.timeout || DEFAULT_SETTINGS.network.timeout) * 1000;
+  } catch {
+    config.timeout = DEFAULT_SETTINGS.network.timeout * 1000;
+  }
   return config;
 });
 
@@ -60,6 +66,7 @@ export const devicesAPI = {
   create:     (data) => api.post('/api/devices', data),
   pair:       (data) => api.post('/api/devices/pair', data),
   claim:      (id) => api.post(`/api/devices/${id}/claim`),
+  mintToken:  (id) => api.post(`/api/devices/${id}/token`),
   delete:     (id) => api.delete(`/api/devices/${id}`),
 };
 

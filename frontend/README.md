@@ -21,7 +21,7 @@ With no `VITE_SUPABASE_URL` set, the app runs in demo mode: login accepts anythi
 Point the backend at the API via one of:
 1. **Vite dev proxy** (default) — `/api` → `http://localhost:5000` (`VITE_DEV_BACKEND` to override).
 2. **Build-time env** — `VITE_API_URL` baked in at build time.
-3. **Runtime override** — Profile → Backend Settings (localStorage, highest priority).
+3. **Runtime override** — Settings → Backend (localStorage, highest priority).
 
 ## Features
 
@@ -29,9 +29,10 @@ Point the backend at the API via one of:
 - **Dashboard** — device cards (name, patient, battery, status, last seen), stats, add-device modal, QR-code device sharing.
 - **Map** — Leaflet map with live trails from `useLocation` (polls `GET /api/location/:id/history`).
 - **Device details** — full device info + telemetry + location history.
-- **Device public page** — `/d/:id` shareable link that renders live status for a family member without a login.
+- **Device public page** — `/d/:id` live lookup (auth-gated `401/403/404` states, no mock data, no fake caregiver contacts).
 - **QR scanning** — `@yudiel/react-qr-scanner` to pair/import devices from a printed serial.
-- **Backend settings** — runtime URL override with a live health-check ping (`backendConfig.js`).
+- **Settings control center** (`/profile`) — appearance (text size, contrast, motion, focus), map style/zoom/trail/crosshair, units/coords/clock, sort/filter/low-battery threshold, auto-refresh, browser alerts, backend URL + timeout + diagnostics, JSON/CSV export + settings backup. Instant-apply via `services/settings.js` (localStorage, versioned + sanitized).
+- **Device alerts** — offline / reconnect / low-battery browser notifications from `DevicesContext` (`services/alerts.js`).
 - **Monochrome dark mode** — grayscale tokens in `index.css`, DejaVu Sans Mono, sharp corners, corner-bracket frames, tabular numbers.
 
 ## Pages & routes
@@ -43,7 +44,17 @@ Point the backend at the API via one of:
 | `/device/:id` | DeviceDetails | protected |
 | `/d/:id` | DevicePublic | public (shareable) |
 | `/map` | MapPage | protected (full width) |
-| `/profile` | Profile | protected (backend settings, sign out) |
+| `/profile` | Settings | protected (redirects to `/profile/account`) |
+| `/profile/account` | Settings · Account | protected |
+| `/profile/appearance` | Settings · Appearance | protected |
+| `/profile/map` | Settings · Map & display | protected |
+| `/profile/devices` | Settings · Devices | protected |
+| `/profile/alerts` | Settings · Notifications | protected |
+| `/profile/backend` | Settings · Backend & network | protected |
+| `/profile/data` | Settings · Data | protected |
+| `/profile/about` | Settings · About (docs, repo, legal) | protected |
+| `/terms` | Terms | public |
+| `/privacy` | Privacy | public |
 
 Routes are guarded by `ProtectedRoute` / `PublicRoute` in `App.jsx`. A global `ErrorBoundary` wraps the app.
 
@@ -68,11 +79,20 @@ frontend/
 │   │   ├── DeviceDetails.jsx    single-device view + telemetry
 │   │   ├── DevicePublic.jsx     shareable public device page (/d/:id)
 │   │   ├── MapPage.jsx          full-width live map
-│   │   └── Profile.jsx          backend URL override + account info
+│   │   ├── Profile.jsx          redirect → /profile/account (backwards compat)
+│   │   ├── settings/
+│   │   │   ├── SettingsLayout.jsx   sidebar shell (rail + chips + identity)
+│   │   │   ├── Account/Appearance/MapDisplay/Device/Alert/Backend/Data/AboutSettings.jsx
+│   │   │   ├── nav.js               section paths + labels (single source)
+│   │   │   └── usePrefs.js          reactive settings snapshot hook
+│   │   ├── Terms.jsx / Privacy.jsx  doc-styled legal pages
 │   ├── components/
 │   │   ├── Header.jsx
 │   │   ├── Sidebar.jsx          desktop nav
 │   │   ├── BottomNav.jsx        mobile nav
+│   │   ├── Footer.jsx           shared footer (docs, repo, legal)
+│   │   ├── LegalLayout.jsx      doc-site shell for legal pages
+│   │   ├── settings/SettingsControls.jsx  Section/Row/Segmented/Switch/Slider
 │   │   ├── DeviceCard.jsx
 │   │   ├── StatCard.jsx
 │   │   ├── AddDeviceModal.jsx
@@ -80,17 +100,21 @@ frontend/
 │   │   ├── QRScanner.jsx        QR modal (scan a device serial)
 │   │   └── ErrorBoundary.jsx
 │   ├── hooks/
-│   │   ├── useDevices.js        device list/CRUD (real API + mock fallback)
+│   │   ├── useDevices.js        re-export of the DevicesContext hook
 │   │   └── useLocation.js       polling location history for a device
 │   ├── context/
-│   │   └── AuthContext.jsx      Supabase auth provider + demo fallback
+│   │   ├── AuthContext.jsx      Supabase auth provider + demo fallback
+│   │   └── DevicesContext.jsx   shared device fetch + polling + alerts
 │   ├── services/
-│   │   ├── api.js               axios instance (+ auth interceptor) + endpoint helpers
+│   │   ├── api.js               axios instance (+ auth interceptor, settings timeout) + endpoint helpers (incl. `mintToken`)
 │   │   ├── backendConfig.js     backend URL resolution + health ping
+│   │   ├── settings.js          central prefs store (persist, sanitize, import/export, sort/filter)
+│   │   ├── alerts.js            browser-notification watcher helpers
 │   │   ├── supabase.js          browser Supabase client (anon key)
-│   │   └── mockData.js          offline fallback data
+│   │   └── mockData.js          test fixtures only (never rendered as live data)
 │   └── utils/
-│       └── constants.js
+│       ├── constants.js
+│       └── format.js            units/coords/clock/timestamp formatting + CSV export
 ```
 
 ## Environment variables

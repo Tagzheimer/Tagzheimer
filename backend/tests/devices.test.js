@@ -10,7 +10,7 @@ describe('devices', () => {
     const r = await request(app).get('/api/health');
     expect(r.status).toBe(200);
     expect(r.body.mode).toBe('demo');
-    expect(r.body.version).toBe('3.0.0');
+    expect(r.body.version).toBe('4.0.0-beta');
   });
   it('pair creates device public', async () => {
     const serial = `TAG-TEST-${Date.now()}`;
@@ -53,7 +53,29 @@ describe('devices', () => {
     } else {
       expect(claim.status).toBe(200);
       expect(claim.body.device.ownerId).toBeDefined();
+      expect(claim.body.accessToken).toBeDefined();
     }
+  });
+  it('pair owned device returns 409 for strangers', async () => {
+    const serial = `TAG-OWNED-${Date.now()}`;
+    const pair = await request(app).post('/api/devices/pair').send({ serialNumber: serial });
+    await request(app).post(`/api/devices/${pair.body.deviceId}/claim`).set('Authorization', auth);
+    const r2 = await request(app).post('/api/devices/pair').send({ serialNumber: serial });
+    expect(r2.status).toBe(409);
+  });
+  it('owner can mint tracker token', async () => {
+    const serial = `TAG-TOKEN-${Date.now()}`;
+    const pair = await request(app).post('/api/devices/pair').send({ serialNumber: serial });
+    await request(app).post(`/api/devices/${pair.body.deviceId}/claim`).set('Authorization', auth);
+    const r = await request(app).post(`/api/devices/${pair.body.deviceId}/token`).set('Authorization', auth);
+    expect(r.status).toBe(200);
+    expect(r.body.accessToken).toBeDefined();
+  });
+  it('device JWT cannot delete device', async () => {
+    const serial = `TAG-NODEL-${Date.now()}`;
+    const pair = await request(app).post('/api/devices/pair').send({ serialNumber: serial });
+    const del = await request(app).delete(`/api/devices/${pair.body.deviceId}`).set('Authorization', `Bearer ${pair.body.accessToken}`);
+    expect(del.status).toBe(403);
   });
   it('delete device', async () => {
     const serial = `TAG-DEL-${Date.now()}`;

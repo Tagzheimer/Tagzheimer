@@ -2,13 +2,14 @@
  * Backend URL resolution
  * ----------------------
  * Priority order (highest wins):
- *   1. Runtime override saved by the user (localStorage) — Profile page
+ *   1. Runtime override saved by the user (localStorage) — Settings page
  *   2. Build-time env var (VITE_API_URL)
  *   3. '' → same-origin, so dev uses the Vite proxy at /api
  *
  * The override lets caregivers point a deployed frontend at any backend
  * without rebuilding (the "deploy anywhere" feature).
  */
+import { getSettings } from './settings.js';
 
 const STORAGE_KEY = 'tagzheimer.backendUrl';
 
@@ -39,12 +40,21 @@ export function isCustomBackend() {
 /**
  * Ping a backend's health endpoint.
  * Returns { ok: boolean, message: string }.
+ * Timeout defaults to the user's network setting (Settings → Backend).
  */
-export async function pingBackend(baseUrl) {
+export async function pingBackend(baseUrl, timeoutMs) {
   const target = normalize(baseUrl);
+  let ms = timeoutMs;
+  if (ms == null) {
+    try {
+      ms = (getSettings().network.timeout || 10) * 1000;
+    } catch {
+      ms = 10000;
+    }
+  }
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 5000);
+    const timer = setTimeout(() => controller.abort(), ms);
     const res = await fetch(`${target}/api/health`, { signal: controller.signal });
     clearTimeout(timer);
     if (!res.ok) {
@@ -53,6 +63,6 @@ export async function pingBackend(baseUrl) {
     const body = await res.json();
     return { ok: true, message: body?.database ? `${body.mode} · ${body.database}` : 'reachable' };
   } catch (err) {
-    return { ok: false, message: err.name === 'AbortError' ? 'Timeout (5s)' : 'Unreachable' };
+    return { ok: false, message: err.name === 'AbortError' ? `Timeout (${Math.round(ms / 1000)}s)` : 'Unreachable' };
   }
 }

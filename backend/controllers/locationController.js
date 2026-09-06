@@ -34,11 +34,14 @@ async function resolveDevice(req) {
     return data;
   }
   if (body.serialNumber) {
+    const serial = String(body.serialNumber ?? '').trim();
     if (table.demo) {
-      return await table.store.findOne({ serialNumber: body.serialNumber });
+      const all = await table.store.find({}).lean();
+      const norm = serial.toLowerCase();
+      return all.find((d) => String(d.serialNumber ?? '').trim().toLowerCase() === norm) || null;
     }
-    const { data } = await table.supabase.select('*').eq('serial_number', body.serialNumber).maybeSingle();
-    return data;
+    const { findDeviceBySerialProd } = require('../utils/serialLookup');
+    return await findDeviceBySerialProd(table.supabase, serial, '*');
   }
   if (req.user?.isDevice && req.user.deviceId) {
     if (table.demo) {
@@ -65,12 +68,24 @@ const updateLocation = async (req, res) => {
     const deviceId = device.id || device._id;
     const serialNumber = device.serial_number || device.serialNumber;
 
-    // Authorization check for device JWT callers
-    if (req.user?.isDevice && String(req.user.deviceId) !== String(deviceId)) {
-      return res.status(403).json({
-        success: false,
-        message: 'Token is not valid for this device',
-      });
+    // Authorization: device tokens may only write their own device; user
+    // tokens may only write devices they own (ownerless writes forbidden —
+    // claim first).
+    if (req.user?.isDevice) {
+      if (String(req.user.deviceId) !== String(deviceId)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Token is not valid for this device',
+        });
+      }
+    } else {
+      const ownerId = device.owner_id ?? device.ownerId ?? null;
+      if (!ownerId || String(ownerId) !== String(req.user.uid)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Forbidden — you do not own this device',
+        });
+      }
     }
 
     const meta = req.body.meta || {};
@@ -154,8 +169,15 @@ const batchUpdate = async (req, res) => {
     }
     const deviceId = device.id || device._id;
 
-    if (req.user?.isDevice && String(req.user.deviceId) !== String(deviceId)) {
-      return res.status(403).json({ success: false, message: 'Token not valid for this device' });
+    if (req.user?.isDevice) {
+      if (String(req.user.deviceId) !== String(deviceId)) {
+        return res.status(403).json({ success: false, message: 'Token not valid for this device' });
+      }
+    } else {
+      const ownerId = device.owner_id ?? device.ownerId ?? null;
+      if (!ownerId || String(ownerId) !== String(req.user.uid)) {
+        return res.status(403).json({ success: false, message: 'Forbidden — you do not own this device' });
+      }
     }
 
     const fixes = (req.body.fixes || []).map((f) => {
@@ -289,6 +311,7 @@ const getCurrentLocation = async (req, res) => {
     }
 
     return res.json({
+      success: true,
       latitude: row.latitude,
       longitude: row.longitude,
       timestamp: row.timestamp,
@@ -305,7 +328,12 @@ const getLocationHistory = async (req, res) => {
   try {
     const { deviceId } = req.params;
     await assertDeviceOwnership(deviceId, req.user);
-    const limit = Math.min(parseInt(req.query.limit || '50', 10), 500);
+    const rawLimit = req.query.limit ?? '50';
+    const parsed = typeof rawLimit === 'string' ? Number.parseInt(rawLimit, 10) : NaN;
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 500) {
+      return res.status(400).json({ success: false, message: 'limit must be an integer 1..500' });
+    }
+    const limit = parsed;
 
     const table = getTable('Location');
 

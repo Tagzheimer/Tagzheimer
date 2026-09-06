@@ -24,13 +24,20 @@ export default function AddDeviceModal({ isOpen, onClose, onSubmit }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!form.name || !form.serialNumber || !form.patientName) {
-      setError('Please fill in all required fields');
+    const name = form.name.trim();
+    const serialNumber = form.serialNumber.trim();
+    const patientName = form.patientName.trim();
+    if (!name || !serialNumber || !patientName) {
+      setError('Please fill in all required fields (whitespace only is not enough)');
+      return;
+    }
+    if (!/^[A-Za-z0-9][A-Za-z0-9\-_]*[A-Za-z0-9]$/.test(serialNumber) || serialNumber.length < 3 || serialNumber.length > 64) {
+      setError('Serial must be 3-64 chars: letters, numbers, dashes, underscores');
       return;
     }
     setSubmitting(true);
     try {
-      await onSubmit(form);
+      await onSubmit({ name, serialNumber, patientName, notes: form.notes.trim() });
       setForm({ name: '', serialNumber: '', patientName: '', notes: '' });
       onClose();
     } catch (err) {

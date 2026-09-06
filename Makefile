@@ -75,12 +75,16 @@ test:  ## Run all test suites
 	@$(MAKE) test-mobile
 
 .PHONY: test-backend
-test-backend:  ## Test the backend endpoints (Bun runtime, demo mode)
-	cd backend && DEMO_MODE=true bun test 2>&1 || cd backend && npm test 2>&1 || echo "No backend test runner — run: cd backend && bun test"
+test-backend:  ## Test the backend endpoints (vitest, demo mode, 37 tests)
+	cd backend && DEMO_MODE=true bun x vitest run
 
 .PHONY: test-frontend
 test-frontend:  ## Verify the frontend builds (Bun)
 	cd frontend && bun run build
+
+.PHONY: test-frontend-unit
+test-frontend-unit:  ## Run the frontend vitest suite (26 tests)
+	cd frontend && bun x vitest run
 
 .PHONY: test-mobile
 test-mobile:  ## TypeScript-check the mobile app (npm)

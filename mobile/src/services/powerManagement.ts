@@ -29,30 +29,31 @@ export async function withWakeLock<T>(fn: () => Promise<T>): Promise<T> {
 
 /**
  * Returns the current battery level (0–100) and whether it's low.
- * On Android, also notifies the caller when the battery drops below 20%.
+ * The low threshold is configurable (settings screen); default 20%.
  */
-export async function getBatteryState(): Promise<{ level: number; isLow: boolean; isCharging: boolean }> {
+export async function getBatteryState(threshold = 20): Promise<{ level: number; isLow: boolean; isCharging: boolean }> {
   const level = await Battery.getBatteryLevelAsync();  // 0..1
   const state = await Battery.getBatteryStateAsync();
   const pct = Math.round(level * 100);
   return {
     level: pct,
-    isLow: pct < 20,
+    isLow: pct < threshold,
     isCharging: state === Battery.BatteryState.CHARGING || state === Battery.BatteryState.FULL,
   };
 }
 
 /**
  * Subscribe to low-battery events.
- * Calls the callback when the level crosses below 20%.
+ * Calls the callback when the level crosses below the threshold.
  */
 export function subscribeToBatteryLow(
-  onLow: (level: number) => void
+  onLow: (level: number) => void,
+  threshold = 20,
 ): () => void {
   let lastLow = false;
   const sub = Battery.addBatteryLevelListener(({ batteryLevel }) => {
     const pct = Math.round(batteryLevel * 100);
-    const isLow = pct < 20;
+    const isLow = pct < threshold;
     if (isLow && !lastLow) onLow(pct);
     lastLow = isLow;
   });

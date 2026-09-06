@@ -9,7 +9,8 @@
  *
  * Lifecycle:
  *   1. startTracking(config)   — registers the task, shows foreground notification
- *   2. The OS calls task()    — fetches GPS, sends to backend, updates notification
+ *   2. The OS calls task()    — acquires a fix (OS-delivered → cached → fresh
+ *      GPS with timeout, per the fixMode pref), sends to backend, updates status
  *   3. pauseTracking()         — task stays registered but skips sends (notification updates)
  *   4. stopTracking()          — unregisters the task, dismisses notification
  *   5. On app boot — loadTrackingStatus() shows if tracking was active before reboot
@@ -24,20 +25,61 @@ import { BackgroundFetchResult } from 'expo-background-fetch';
 import * as Battery from 'expo-battery';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { loadConfig, saveTrackingStatus, loadTrackingStatus, TrackingStatus } from './storage';
+import { loadConfig, saveTrackingStatus, loadTrackingStatus, loadPrefs, TrackerConfig, TrackerPrefs, TrackingStatus } from './storage';
 import { sendFix, syncBatch, GpsFix } from './api';
 import { notifyAlert } from './notifications';  // foreground notification is managed by Android itself via startLocationUpdatesAsync
 import { withWakeLock, getBatteryState } from './powerManagement';
+import { pickCheapestFix, freshnessWindowMs, FixCandidate, FixSource } from './fixStrategy';
 
 const LOCATION_TASK = 'tagz-location-task';
 const SYNC_TASK     = 'tagz-sync-task';        // periodic sync check
 const STATUS_EVENT  = 'tagz-status-event';
 
-// === In-memory queue (lost on app kill — main purpose is to coalesce
-// backend-unreachable retries within a session) ===
+// === Offline queue: in-memory for speed + AsyncStorage for survival ===
+// The queue survives app kill/reboot (bounded FIFO, oldest dropped first).
+// Persisted copy is best-effort: corruption resets to empty, never crashes.
+const QUEUE_KEY = 'tagz.queue.v1';
 const offlineQueue: GpsFix[] = [];
+let queueLoaded = false;
 let consecutiveFailures = 0;
+let lowBatteryNotified = false;  // once per tracking session
 let statusSnapshot: TrackingStatus | null = null;
+
+async function loadQueue(prefsQueueLimit: number): Promise<void> {
+  if (queueLoaded) return;
+  queueLoaded = true;
+  try {
+    const raw = await AsyncStorage.getItem(QUEUE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      for (const f of parsed.slice(-prefsQueueLimit)) {
+        if (f && typeof f.latitude === 'number' && typeof f.longitude === 'number') {
+          offlineQueue.push(f as GpsFix);
+        }
+      }
+    }
+  } catch { /* corrupt queue — start empty */ }
+}
+
+async function persistQueue(): Promise<void> {
+  try {
+    await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(offlineQueue));
+  } catch { /* quota/private mode — keep in-memory only */ }
+}
+
+async function pushQueued(fix: GpsFix, limit: number): Promise<void> {
+  await loadQueue(limit);
+  offlineQueue.push(fix);
+  // FIFO bound: drop oldest first and count the loss via status counters.
+  while (offlineQueue.length > limit) offlineQueue.shift();
+  await persistQueue();
+}
+
+async function clearQueue(): Promise<void> {
+  offlineQueue.length = 0;
+  await persistQueue();
+}
 
 // === Status pub/sub — components subscribe to update UI ===
 type StatusListener = (status: TrackingStatus) => void;
@@ -58,9 +100,71 @@ async function emitStatus(patch: Partial<TrackingStatus>) {
   listeners.forEach((l) => l(next));
 }
 
+/** Map the user-facing accuracy pref to an expo-location accuracy. */
+function toExpoAccuracy(prefs: TrackerPrefs): Location.Accuracy {
+  switch (prefs.accuracy) {
+    case 'saver':   return Location.Accuracy.Low;
+    case 'precise': return Location.Accuracy.High;
+    case 'balanced':
+    default:        return Location.Accuracy.Balanced;
+  }
+}
+
+/** Shared location-task options so start / bootstrap / reconfigure agree. */
+function buildTaskOptions(config: TrackerConfig, prefs: TrackerPrefs) {
+  const intervalSec = Number.isFinite(config.interval) ? Math.min(3600, Math.max(60, config.interval)) : 60;
+  return {
+    accuracy: toExpoAccuracy(prefs),
+    timeInterval: intervalSec * 1000,  // Android clamps to 60s min
+    distanceInterval: prefs.distanceInterval,  // 0 = fire on schedule regardless of movement
+    foregroundService: {
+      notificationTitle: 'Tagzheimer tracking',
+      notificationBody:  `Serial: ${config.serial}`,
+      notificationColor: '#0a0a0a',
+    },
+    pausesUpdatesAutomatically: false, // don't pause when stationary
+    showsBackgroundLocationIndicator: true,
+  };
+}
+
+function toCandidate(loc: Location.LocationObject): FixCandidate {
+  return {
+    latitude: loc.coords.latitude,
+    longitude: loc.coords.longitude,
+    timestamp: loc.timestamp,
+    accuracy: loc.coords.accuracy ?? null,
+  };
+}
+
+async function readCachedFix(): Promise<FixCandidate | null> {
+  try {
+    const loc = await Location.getLastKnownPositionAsync();
+    return loc ? toCandidate(loc) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fresh GPS one-shot, bounded by the user's timeout so a cold start with
+ * no sky view can't hold the radio on indefinitely (the old code had no
+ * bound at all). Resolves null on timeout or provider error.
+ */
+async function readFreshLoc(prefs: TrackerPrefs): Promise<Location.LocationObject | null> {
+  const timeoutMs = Math.max(5, prefs.gpsTimeoutSec) * 1000;
+  try {
+    return await Promise.race([
+      Location.getCurrentPositionAsync({ accuracy: toExpoAccuracy(prefs) }),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+    ]);
+  } catch {
+    return null;
+  }
+}
+
 // === Background task definition ===
 
-async function performTrackingCycle() {
+async function performTrackingCycle(taskFix?: FixCandidate | null) {
   // Skip if paused
   const status = await loadTrackingStatus();
   if (status.state === 'paused') {
@@ -75,30 +179,52 @@ async function performTrackingCycle() {
     await emitStatus({ lastError: 'No serial configured', lastSendAt: Date.now() });
     return;
   }
+  const prefs = await loadPrefs();
 
   await withWakeLock(async () => {
-    // 1. Get current location
-    let loc: Location.LocationObject | null = null;
-    try {
-      loc = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced,  // lower accuracy = less battery drain in background
-      });
-    } catch (err: any) {
-      await emitStatus({ lastError: `GPS error: ${err.message}` });
+    // 1. Acquire a fix — cheapest usable source wins (see fixStrategy.ts).
+    //    Precise mode always powers the GPS; efficient mode reuses the free
+    //    OS-delivered fix or a fresh-enough cached one first.
+    const windowMs = freshnessWindowMs(config.interval);
+    const nowMs = Date.now();
+    let candidate: FixCandidate | null = null;
+    let source: FixSource = 'none';
+    let fullLoc: Location.LocationObject | null = null;
+
+    if (prefs.fixMode === 'efficient') {
+      const picked = pickCheapestFix(taskFix ?? null, await readCachedFix(), nowMs, windowMs);
+      candidate = picked.fix;
+      source = picked.source;
+    }
+
+    if (!candidate) {
+      fullLoc = await readFreshLoc(prefs);
+      if (fullLoc) {
+        candidate = toCandidate(fullLoc);
+        source = 'gps';
+      } else if (prefs.fixMode === 'efficient') {
+        // GPS timed out — a stale cached fix still beats reporting nothing.
+        candidate = await readCachedFix();
+        source = candidate ? 'gps-stale' : 'none';
+      }
+    }
+
+    if (!candidate) {
+      await emitStatus({ lastError: 'GPS unavailable (timeout, no cached fix)', lastSendAt: Date.now() });
       return;
     }
 
     const fix: GpsFix = {
-      latitude:  loc.coords.latitude,
-      longitude: loc.coords.longitude,
-      timestamp: new Date(loc.timestamp).toISOString(),
-      accuracy:  loc.coords.accuracy  ?? null,
-      altitude:  loc.coords.altitude  ?? null,
-      speed:      loc.coords.speed      ?? null,
+      latitude:  candidate.latitude,
+      longitude: candidate.longitude,
+      timestamp: new Date(candidate.timestamp).toISOString(),
+      accuracy:  candidate.accuracy,
+      altitude:  fullLoc?.coords.altitude  ?? null,
+      speed:      fullLoc?.coords.speed      ?? null,
     };
 
-    // 2. Get battery
-    const battery = await getBatteryState();
+    // 2. Get battery (low threshold follows the user's pref)
+    const battery = await getBatteryState(prefs.batteryThreshold);
 
     // 3. Send (or queue)
     const result = await sendFix(config, fix, battery.level);
@@ -110,33 +236,35 @@ async function performTrackingCycle() {
         lastSendAt:  Date.now(),
         lastSendOk:  true,
         lastError:   null,
+        lastFixSource: source,
         totalSent:   (status.totalSent || 0) + 1,
       };
       await emitStatus(patch);
 
       // Drain any queued offline fixes
+      await loadQueue(prefs.queueLimit);
       if (offlineQueue.length > 0) {
-        const batchResult = await syncBatch(config, offlineQueue, battery.level);
+        const batchResult = await syncBatch(config, [...offlineQueue], battery.level);
         if (batchResult.success) {
-          offlineQueue.length = 0;
+          await clearQueue();
         }
       }
     } else {
       consecutiveFailures++;
-      offlineQueue.push(fix);
-      if (offlineQueue.length > 50) offlineQueue.shift();  // bound the queue
+      await pushQueued(fix, prefs.queueLimit);
       const patch: Partial<TrackingStatus> = {
         lastFixAt:   Date.now(),
         lastSendAt:  Date.now(),
         lastSendOk:  false,
         lastError:   result.error || 'Unknown error',
+        lastFixSource: source,
         queuedCount: offlineQueue.length,
         totalFailed: (status.totalFailed || 0) + 1,
       };
       await emitStatus(patch);
 
       // Notify on 3rd consecutive failure (don't spam on every miss)
-      if (consecutiveFailures === 3) {
+      if (consecutiveFailures === 3 && prefs.failureAlerts) {
         await notifyAlert(
           'Backend unreachable',
           `3 consecutive failures. Last error: ${(result.error || '').slice(0, 80)}`,
@@ -148,10 +276,15 @@ async function performTrackingCycle() {
     // 4. Update foreground notification
     // (foreground notification is managed by Android — status shown in-app via subscribeToStatus)
 
-    // 5. Battery alert
-    if (battery.isLow && !battery.isCharging) {
-      // Only alert once when crossing threshold — could use a flag in storage
-      // For simplicity, just include it in the notification body
+    // 5. Battery alert — once per tracking session when crossing the
+    // user's threshold (and not charging)
+    if (battery.isLow && !battery.isCharging && prefs.batteryAlerts && !lowBatteryNotified) {
+      lowBatteryNotified = true;
+      await notifyAlert(
+        'Tracker battery low',
+        `Battery at ${battery.level}% (threshold ${prefs.batteryThreshold}%). Charge this device soon.`,
+        { screen: 'paired' },
+      );
     }
   });
 }
@@ -162,10 +295,18 @@ TaskManager.defineTask(LOCATION_TASK, async ({ data, error }) => {
     console.error('[BG] location task error:', error);
     return;
   }
-  // data contains the new location if we use watchPosition; since we
-  // use getCurrentPositionAsync inside the task, we ignore data here.
+  // The OS delivers its own fix with the task wakeup — passing it in lets
+  // efficient mode skip powering the GPS chip entirely this cycle.
+  let taskFix: FixCandidate | null = null;
   try {
-    await performTrackingCycle();
+    const locs = (data as unknown as { locations?: Location.LocationObject[] })?.locations;
+    const last = Array.isArray(locs) && locs.length > 0 ? locs[locs.length - 1] : null;
+    taskFix = last ? toCandidate(last) : null;
+  } catch {
+    taskFix = null;
+  }
+  try {
+    await performTrackingCycle(taskFix);
   } catch (err) {
     console.error('[BG] tracking cycle failed:', err);
   }
@@ -180,6 +321,17 @@ TaskManager.defineTask(SYNC_TASK, async () => {
   try {
     const status = await loadTrackingStatus();
     if (status.state !== 'running') return BackgroundFetchResult.NoData;
+    // The location task already fires on schedule — only run a sync cycle
+    // when the last send is stale. Without this gate both tasks fire every
+    // interval and the tracker burns 2× requests (and 2× per-device rate
+    // budget) for zero extra freshness.
+    const config = await loadConfig();
+    const intervalMs = (Number.isFinite(config.interval)
+      ? Math.min(3600, Math.max(15, config.interval))
+      : 60) * 1000;
+    if (status.lastSendAt && Date.now() - status.lastSendAt < intervalMs * 0.9) {
+      return BackgroundFetchResult.NoData;
+    }
     await performTrackingCycle();
     return BackgroundFetchResult.NewData;
   } catch (err) {
@@ -212,23 +364,11 @@ export async function startTracking(): Promise<{ ok: boolean; error?: string }> 
 
   // 2. Register the location task
   const config = await loadConfig();
+  const prefs = await loadPrefs();
   try {
     const isRegistered = await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK);
     if (!isRegistered) {
-      // Convert interval (seconds) to timeInterval (ms); minimum 60000 (60s) on Android
-      const intervalMs = Math.max(60, config.interval) * 1000;
-      await Location.startLocationUpdatesAsync(LOCATION_TASK, {
-        accuracy: Location.Accuracy.Balanced,
-        timeInterval: intervalMs,
-        distanceInterval: 0,    // 0 = fire on schedule regardless of movement
-        foregroundService: {
-          notificationTitle: 'Tagzheimer tracking',
-          notificationBody:  `Serial: ${config.serial}`,
-          notificationColor: '#0a0a0a',
-        },
-        pausesUpdatesAutomatically: false, // don't pause when stationary
-        showsBackgroundLocationIndicator: true,
-      });
+      await Location.startLocationUpdatesAsync(LOCATION_TASK, buildTaskOptions(config, prefs));
     }
   } catch (err: any) {
     return { ok: false, error: `Task registration failed: ${err.message}` };
@@ -240,6 +380,8 @@ export async function startTracking(): Promise<{ ok: boolean; error?: string }> 
     startedAt: Date.now(),
     lastError: null,
   });
+  consecutiveFailures = 0;
+  lowBatteryNotified = false;
 
   // 4. The persistent foreground notification is created by Android itself
   // (via the `foregroundService` config above). We DON'T schedule a separate
@@ -293,31 +435,58 @@ export async function stopTracking(): Promise<void> {
   // (foreground service notification is auto-dismissed by Android when we stop the task)
   await notifyAlert('Tracking stopped', 'Tagzheimer is no longer tracking this device');
 
-  // Clear in-memory queue
-  offlineQueue.length = 0;
+  // Clear queue (memory + persisted)
+  await clearQueue();
   consecutiveFailures = 0;
+  lowBatteryNotified = false;
+}
+
+/**
+ * Re-register the OS location task with the current interval / accuracy /
+ * distance prefs — called by the settings screen so changes apply without
+ * stopping tracking. No-op when tracking isn't active.
+ */
+export async function reconfigureTask(): Promise<void> {
+  try {
+    const isRegistered = await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK);
+    if (!isRegistered) return;
+    const config = await loadConfig();
+    const prefs = await loadPrefs();
+    await Location.stopLocationUpdatesAsync(LOCATION_TASK);
+    await Location.startLocationUpdatesAsync(LOCATION_TASK, buildTaskOptions(config, prefs));
+  } catch (err) {
+    console.warn('[BG] reconfigure failed:', err);
+  }
 }
 
 /**
  * Bootstrap on app start — call from the root layout effect.
- * Checks if tracking was active before and re-registers the task if so.
+ * Checks if tracking was active before and re-registers the task if so
+ * (unless the user disabled auto-resume in settings).
  */
 export async function bootstrapTracking() {
   const status = await loadTrackingStatus();
   statusSnapshot = status;
 
   if (status.state === 'running' || status.state === 'paused') {
+    const prefs = await loadPrefs();
+    if (!prefs.autoResume) {
+      // User opted out — park the state instead of silently restarting.
+      await emitStatus({ state: 'stopped', startedAt: null });
+      return;
+    }
     // Was running before — restart the OS-level task (it doesn't survive app kill
     // on some Android versions)
     const config = await loadConfig();
     try {
       const isRegistered = await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK);
       if (!isRegistered) {
-        const intervalMs = Math.max(60, config.interval) * 1000;
+        const safeInterval = Number.isFinite(config.interval) ? Math.min(3600, Math.max(60, config.interval)) : 60;
+        const intervalMs = safeInterval * 1000;
         await Location.startLocationUpdatesAsync(LOCATION_TASK, {
-          accuracy: Location.Accuracy.Balanced,
+          accuracy: toExpoAccuracy(prefs),
           timeInterval: intervalMs,
-          distanceInterval: 0,
+          distanceInterval: prefs.distanceInterval,
           foregroundService: {
             notificationTitle: 'Tagzheimer tracking',
             notificationBody:  `Serial: ${config.serial}`,

@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getDevices, getDeviceById, getDeviceBySerial, createDevice, pairDevice, claimDevice, deleteDevice } = require('../controllers/deviceController');
+const { getDevices, getDeviceById, getDeviceBySerial, createDevice, pairDevice, claimDevice, deleteDevice, refreshDeviceToken } = require('../controllers/deviceController');
 const { verifyFirebaseToken } = require('../middleware/auth');
 const { validateCreateDevice, validateDeviceId, validateSerial, validatePairDevice } = require('../middleware/validation');
 
@@ -22,6 +22,7 @@ router.get('/serial/:serialNumber', validateSerial, getDeviceBySerial);
 router.get('/', getDevices);
 router.post('/', validateCreateDevice, createDevice);
 router.post('/:id/claim', validateDeviceId, claimDevice);
+router.post('/:id/token', validateDeviceId, refreshDeviceToken);
 router.get('/:id', validateDeviceId, getDeviceById);
 router.delete('/:id', validateDeviceId, deleteDevice);
 

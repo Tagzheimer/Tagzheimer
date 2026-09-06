@@ -1,33 +1,15 @@
 import { useNavigate } from 'react-router-dom';
+import { batteryTier, useSettings } from '../services/settings';
+import { formatTimestamp } from '../utils/format';
 
-function getTimeAgo(dateStr) {
-  if (!dateStr) return '—';
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return 'just now';
-  if (mins === 1) return '1m ago';
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ${mins % 60}m ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
-}
-
-// All status colors are now monochrome tints
-function getBatteryClass(level) {
-  if (level >= 60) return 'text-ink';       // bright = good
-  if (level >= 20) return 'text-ink-2';     // mid = warn
-  return 'text-ink-3';                       // dim = critical
-}
-
-function getBatteryBarClass(level) {
-  if (level >= 60) return 'bg-white';
-  if (level >= 20) return 'bg-ink-2';
-  return 'bg-ink-3';
-}
+const TIER_TEXT = { full: 'text-ink', mid: 'text-ink-2', low: 'text-ink-3' };
+const TIER_BAR = { full: 'bg-white', mid: 'bg-ink-2', low: 'bg-ink-3' };
 
 export default function DeviceCard({ device }) {
   const navigate = useNavigate();
+  const settings = useSettings();
   const online = device.status === 'online';
+  const tier = batteryTier(device.battery, settings.devices.lowBattery);
 
   return (
     <div
@@ -66,12 +48,12 @@ export default function DeviceCard({ device }) {
       <div className="flex items-center gap-3 mb-3">
         <div className="flex-1 h-1 bg-surface-3 overflow-hidden">
           <div
-            className={`h-full transition-all ${getBatteryBarClass(device.battery)}`}
-            style={{ width: `${device.battery}%` }}
+            className={`h-full transition-all ${TIER_BAR[tier]}`}
+            style={{ width: `${Math.min(100, Math.max(0, Number(device.battery) || 0))}%` }}
           />
         </div>
-        <span className={`text-[12px] font-semibold tabular-nums ${getBatteryClass(device.battery)}`}>
-          {device.battery}%
+        <span className={`text-[12px] font-semibold tabular-nums ${TIER_TEXT[tier]}`}>
+          {device.battery === null || device.battery === undefined ? '—' : `${device.battery}%`}
         </span>
       </div>
 
@@ -81,7 +63,7 @@ export default function DeviceCard({ device }) {
           <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
-          <span className="label-mono">{getTimeAgo(device.lastSeen)}</span>
+          <span className="label-mono">{formatTimestamp(device.lastSeen, settings.display)}</span>
         </div>
         <span className="text-[11px] font-semibold text-ink flex items-center gap-1 label-mono group-hover:gap-2 transition-all">
           View

@@ -34,10 +34,11 @@ npx expo start
 ### 1.3 On your phone:
 - Open Expo Go
 - Scan the QR code shown in your terminal (use the phone's camera or the Expo Go app's scan button)
-- The app loads. Pair with serial `TAG-001` and tap "Send Now".
+- The app loads. Pair with a FRESH serial (e.g. `PHONE-001`, not `TAG-001` which is already owned in demo — owned re-pair returns `409`), then claim it in the dashboard and tap "Send Now".
 
 ### Backend URL for the phone
-The phone needs to reach your backend over the LAN:
+The phone needs to reach your backend over the LAN.
+The app sanitizes the URL (must be `http(s)://`, trailing slashes trimmed) and the interval (clamped `15..3600s`):
 - If backend runs on your laptop → enter `http://<laptop-LAN-IP>:5000` (e.g. `http://192.168.1.50:5000`)
 - If backend is deployed → enter `https://api.your-domain.com`
 

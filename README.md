@@ -26,10 +26,10 @@ Real-time GPS tracking system for Alzheimer's patients. Four components, one mon
 
 | Folder | What | Tech | Status |
 |--------|------|------|--------|
-| `backend/` | REST API | Bun + Express + Supabase JS client (or in-memory demo) | v3.0 |
-| `frontend/` | Caregiver dashboard | Vite + React 19 + Tailwind v4 (monochrome dark) | v3.0 |
-| `mobile/` | Android tracker app | Expo SDK 52 + React Native + TypeScript (monochrome dark) | v2.1 |
-| `firmware/` | ESP32-WROVER + NEO-6M firmware | Arduino IDE + TinyGPSPlus + ArduinoJson | v2.0 |
+| `backend/` | REST API | Bun + Express + Supabase JS client (or in-memory demo) | v4.0.0-beta |
+| `frontend/` | Caregiver dashboard | Vite + React 19 + Tailwind v4 (monochrome dark) | v4.0.0-beta |
+| `mobile/` | Android tracker app | Expo SDK 52 + React Native + TypeScript (monochrome dark) | v4.0.0-beta |
+| `firmware/` | ESP32-WROVER + NEO-6M firmware | Arduino IDE + TinyGPSPlus + ArduinoJson | v4.0.0-beta |
 
 ## Quick start
 
@@ -46,7 +46,10 @@ cd frontend && bun install && bun run dev
 # Mobile app (yet another terminal)
 cd mobile && npm install --legacy-peer-deps && npx expo start
 # Scan QR with Expo Go on your Android phone
-# Pair with serial "TAG-001", tap "START TRACKING"
+# Pair with a FRESH serial (e.g. "PHONE-001") — TAG-001..TAG-004 are
+# already owned by the demo user, re-pairing an owned serial returns 409.
+# Then claim it in the dashboard (or via POST /api/devices/:id/claim),
+# tap "START TRACKING"
 ```
 
 You're now running the full stack end-to-end with zero infrastructure. The dashboard shows your phone's GPS location updating in real-time.
@@ -77,14 +80,18 @@ make test         # run all test suites
 make help         # same as above
 ```
 
-## Key features (v3)
+## Key features (v4)
+
+> **Upgrading from v3?** See [`CHANGELOG.md`](./CHANGELOG.md) — claim-gated pairing, per-device rate limits, and strict validation are breaking changes. Run `backend/supabase/audit.sql` before deploying against real data.
 
 - **Supabase backend** — Postgres + Auth + RLS. Caregivers sign up/log in with email + password; all tables are row-level-secured per owner.
-- **Easy device pairing** — POST `/api/devices/pair` with just a serial number; auto-provisions if device doesn't exist; returns a signed device JWT for subsequent updates
+- **Claim-gated pairing** — POST `/api/devices/pair` provisions OWNERLESS devices only (serial `A-Za-z0-9-_`, 3–64 chars). Re-pairing an owned serial returns `409`; claim via `POST /api/devices/:id/claim` (rotates the pairing secret, revokes pre-claim tokens, returns a fresh tracker token); lost tokens are re-minted by the owner via `POST /api/devices/:id/token`
+- **Ownership-enforced writes** — location writes require ownership (user JWT must own the device; device JWT must match it). Ownerless writes via user JWT are `403 — claim first`. Serial lookups for non-owned devices return `404` (no enumeration oracle)
 - **Serial-number-based updates** — firmware + mobile app send `serialNumber` (not Mongo `_id`), backend resolves internally
 - **Rich telemetry** — every location fix stores battery %, satellites, hdop, altitude, speed, source (`esp32` | `mobile` | `web`)
-- **Offline queue** — both firmware (NVS) and mobile app (in-memory) queue failed sends; sync via `POST /api/location/batch` on next success
-- **Location history** — `GET /api/location/:deviceId/history?limit=N` for trail visualization
+- **Offline queue** — firmware (NVS, bounded FIFO evict-oldest, max 10) and mobile app (persisted AsyncStorage FIFO, configurable 25/50/100) queue failed sends; sync via `POST /api/location/batch` on next success
+- **Location history** — `GET /api/location/:deviceId/history?limit=N` (`limit` strict integer `1..500` else `400`; future timestamps rejected; oversize bodies `413`). Online status is computed from `lastSeen ≤15min` — a silent tracker reads `offline`, never stuck `online`
+- **Fail-visible frontend** — no mock-location masquerade: backend outages render empty + error + retry, never synthetic NYC positions
 - **Background mobile tracking** — the Android app runs as a foreground service, survives app kill + device reboot, shows action buttons in the notification tray
 - **Custom backend URL** — caregivers can change the backend URL at runtime via Profile → Backend Settings (stored in localStorage)
 - **Monochrome dark mode** — pure grayscale palette (no hue anywhere), DejaVu Sans Mono everywhere, sharp 0px corners, corner-bracket frames, telemetry-style tabular numbers
@@ -97,12 +104,12 @@ backend/
 ├── server.js                    Express bootstrap with graceful shutdown
 ├── routes/
 │   ├── auth.js                  POST /verify (Supabase user JWT)
-│   ├── devices.js               incl. /pair and /serial/:serialNumber
+│   ├── devices.js               incl. /pair, /:id/claim, /:id/token, /serial/:serialNumber
 │   └── location.js              /update, /batch, /:deviceId, /:deviceId/history
 ├── controllers/
 │   ├── authController.js        profile lookup from Supabase `profiles`
-│   ├── deviceController.js      incl. pairDevice, getDeviceBySerial
-│   └── locationController.js    incl. batchUpdate, getLocationHistory
+│   ├── deviceController.js      incl. pairDevice, claimDevice, refreshDeviceToken, getDeviceBySerial
+│   └── locationController.js    incl. batchUpdate, getLocationHistory (ownership-enforced)
 ├── middleware/
 │   ├── auth.js                  verifies device JWTs + Supabase user JWTs (JWKS/HS256)
 │   └── validation.js            all express-validator schemas
@@ -124,12 +131,12 @@ frontend/
 │   ├── pages/                   Login, Dashboard, DeviceDetails, DevicePublic, MapPage, Profile
 │   ├── components/              Header, Sidebar, BottomNav, DeviceCard, StatCard, AddDeviceModal,
 │   │                            MapView, QRScanner, ErrorBoundary
-│   ├── hooks/                   useDevices, useLocation (real backend + mock fallback)
+│   ├── hooks/                   useDevices, useLocation (live backend, fail-visible — no mock fallback)
 │   ├── services/
 │   │   ├── api.js               axios + all v3 endpoints
 │   │   ├── backendConfig.js     runtime URL override (localStorage)
 │   │   ├── supabase.js          browser Supabase client (anon key, RLS-protected)
-│   │   └── mockData.js          fallback data
+│   │   └── mockData.js          test fixtures only (never rendered as live data)
 │   ├── context/AuthContext.jsx  Supabase auth (login/signup/logout, demo fallback)
 │   ├── utils/constants.js
 │   └── index.css                monochrome dark-mode tokens
@@ -181,13 +188,12 @@ firmware/
 ## Testing
 
 ```bash
-make test-frontend       # vite production build
-make test-mobile         # TypeScript check (tsc --noEmit)
+make test-backend        # backend vitest suite (37 tests, DEMO_MODE=true)
+make test-frontend       # vite production build (code-split)
+make test-frontend-unit  # frontend vitest suite (26 tests)
+make test-mobile         # TypeScript check (tsc --noEmit) + vitest (13 tests)
 make test-mobile-bundle  # Expo Android bundle export
-make test-backend        # backend endpoint tests (needs scripts/test_backend.sh, not checked in)
 ```
-
-Note: `make test-backend` points at a test script that lives outside this repo (`scripts/test_backend.sh`). Pull it in (or run the API manually against `DEMO_MODE=true`) before relying on it.
 
 ## Documentation
 

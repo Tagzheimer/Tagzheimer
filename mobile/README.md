@@ -127,11 +127,20 @@ cd android
 The app behaves exactly like the ESP32 firmware:
 
 1. **Pair** — enter a serial number, the backend returns a `deviceId` + `accessToken` (signed JWT). Stored in `SecureStore` (encrypted on-device).
-2. **Acquire GPS** — uses `expo-location` with `BestForNavigation` accuracy, requests foreground + background permissions.
+2. **Acquire GPS** — battery-aware pipeline (see below): OS-delivered fix → fresh cached fix → bounded GPS one-shot. Foreground + background permissions requested once.
 3. **Send** — `POST /api/location/update` with `{ serialNumber, latitude, longitude, meta: { battery, source: 'mobile', altitude, speed } }` every N seconds (configurable).
 4. **Offline queue** — if the send fails, the fix is queued in memory. On the next successful send, queued fixes are synced via `POST /api/location/batch`.
 5. **Auto / Manual mode** — toggle between "send every N seconds" and "send on demand".
 6. **Battery reading** — included in every `meta.battery` payload, mirrored to `Device.battery` on the backend.
+
+### Battery: why it doesn't drain the phone
+
+GPS acquisition is the most expensive thing this app does, so the cycle avoids powering the radio whenever possible (efficient mode, the default):
+
+- **OS-delivered fix first** — the location task already wakes the app with a fix; reusing it costs zero extra radio time (previously it was thrown away and the GPS was powered up again).
+- **Fresh cache second** — `getLastKnownPositionAsync` is a free binder call; accepted when newer than ~1.5× the update interval (min 60s) and accurate to ≤150m.
+- **Bounded GPS last** — one-shot acquisition races a configurable timeout (default 20s), so a no-sky-view cold start can't hold the radio on forever; on timeout the cycle reports the stale cache instead of nothing.
+- **Precise mode** in Settings restores always-fresh-GPS behavior. The tracker screen shows the source of the last fix (`OS FIX · NO RADIO` / `CACHED` / `GPS FIX`), and the UI battery readout is event-driven (no polling timers).
 
 ---
 
@@ -151,11 +160,15 @@ The app behaves exactly like the ESP32 firmware:
 - Auto/manual toggle
 - Transmission log (last 20 entries)
 
-### `/settings` — Settings screen
-- Edit backend URL (with health check)
-- Pick update interval (10s / 30s / 1m / 5m / 15m)
-- View device info (serial, deviceId, truncated token)
-- Unpair button (clears SecureStore, returns to pairing)
+### `/settings` — Settings screen (instant-apply)
+- Connection: backend URL with health check
+- Tracking: update interval (10s / 30s / 1m / 5m / 15m, live-reconfigures), GPS accuracy (saver / balanced / precise), movement filter (time-only / 5m / 25m / 50m)
+- Fix strategy: efficient (reuse OS/cached fixes) vs precise (always fresh GPS) + GPS timeout (10–30s)
+- Power: auto-resume after kill/reboot, Android battery-settings shortcut
+- Power: auto-resume after kill/reboot, Android battery-settings shortcut
+- Alerts: connection-failure + low-battery toggles, low-battery threshold (10/15/20/30%)
+- Offline queue: max fixes (25 / 50 / 100) + queued count
+- Device info (serial, deviceId, truncated token), reset preferences, unpair
 
 ---
 
@@ -175,11 +188,13 @@ mobile/
 │   ├── services/
 │   │   ├── api.ts               ← pair(), sendFix(), syncBatch(), pingBackend()
 │   │   ├── backgroundTask.ts    ← expo-task-manager LOCATION + SYNC tasks, offline queue,
-│   │   │                          start/pause/resume/stop, status pub/sub, boot bootstrap
+│   │   │                          start/pause/resume/stop, status pub/sub, boot bootstrap,
+│   │   │                          battery-aware fix acquisition (task → cached → GPS+timeout)
+│   │   │   ├── fixStrategy.ts       ← pure fix-picking policy (freshness window, accuracy gate)
 │   │   ├── gps.ts               ← expo-location wrappers (permissions, one-shot, watch)
 │   │   ├── notifications.ts     ← alert channels + one-shot notifications
-│   │   ├── powerManagement.ts   ← wake lock during sends + battery state
-│   │   └── storage.ts           ← SecureStore (token) + AsyncStorage (config + tracking state)
+│   │   ├── powerManagement.ts   ← wake lock during sends + battery state (configurable threshold)
+│   │   └── storage.ts           ← SecureStore (token) + AsyncStorage (config + tracking state + prefs)
 │   └── styles/
 │       └── theme.ts             ← monochrome dark palette + shared styles
 ├── assets/                      ← icon, adaptive-icon, splash, favicon, notification-icon (PNG)

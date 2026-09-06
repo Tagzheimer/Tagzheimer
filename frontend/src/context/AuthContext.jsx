@@ -31,11 +31,17 @@ export function AuthProvider({ children }) {
 
     (async () => {
       if (!isSupabaseConfigured()) {
-        // No Supabase configured — try to restore from localStorage (demo mode)
-        const stored = localStorage.getItem('user');
+        // No Supabase configured — try to restore from either storage
+        // (login with "remember me" uses localStorage, otherwise session).
+        const stored = localStorage.getItem('user') || sessionStorage.getItem('user');
         const token = localStorage.getItem('token') || sessionStorage.getItem('token');
         if (stored && token) {
-          setUser(JSON.parse(stored));
+          try {
+            setUser(JSON.parse(stored));
+          } catch {
+            localStorage.removeItem('user');
+            sessionStorage.removeItem('user');
+          }
         }
         setLoading(false);
         return;
@@ -95,8 +101,10 @@ export function AuthProvider({ children }) {
   // === Sign in (email + password) ===
   const login = async (email, password, remember) => {
     if (!isSupabaseConfigured()) {
-      // Demo mode fallback — accept any creds, use mock-token for the API
-      const demoUser = { id: 'demo-user', email, name: email?.split('@')[0] || 'Demo User' };
+      // Demo mode fallback — accept any creds, use mock-token for the API.
+      // The id must match the backend mock-token uid (demo-user-uuid) and
+      // the demo seed owner, otherwise the device list comes back empty.
+      const demoUser = { id: 'demo-user-uuid', email, name: email?.split('@')[0] || 'Demo User' };
       setUser(demoUser);
       if (remember) {
         localStorage.setItem('user', JSON.stringify(demoUser));

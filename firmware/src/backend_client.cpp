@@ -100,9 +100,10 @@ bool BackendClient::_doPair() {
   _storePairing(deviceId, accessToken);
 
   if (DEBUG) {
-    Serial.printf("[NET] paired! deviceId=%s token=%s...\n",
+    // Never log token material — even a prefix aids brute-force.
+    Serial.printf("[NET] paired! deviceId=%s token_len=%d\n",
                   deviceId.c_str(),
-                  accessToken.substring(0, 20).c_str());
+                  accessToken.length());
   }
   return true;
 }
@@ -200,10 +201,21 @@ SendResult BackendClient::sendLocation(const GpsFix& fix, uint8_t batteryPct) {
     }
   }
 
-  // Queue for later
-  if (_queueSize < MAX_QUEUE) {
+  // Queue for later (bounded FIFO: drop oldest when full, never lose the
+  // newest fix silently without accounting).
+  {
     Preferences prefs;
     prefs.begin(kPrefNamespace, false);
+    if (_queueSize >= MAX_QUEUE) {
+      // Evict oldest (q0), shift the rest down.
+      for (int i = 1; i < _queueSize; ++i) {
+        String src = String(kPrefQueueKey) + String((unsigned int)i);
+        String dst = String(kPrefQueueKey) + String((unsigned int)(i - 1));
+        prefs.putString(dst.c_str(), prefs.getString(src.c_str(), ""));
+      }
+      _queueSize = MAX_QUEUE - 1;
+      if (DEBUG) Serial.println("[NET] queue full — dropped oldest fix");
+    }
     String key = String(kPrefQueueKey) + String((unsigned int)_queueSize);
     prefs.putString(key.c_str(), json);
     _queueSize++;

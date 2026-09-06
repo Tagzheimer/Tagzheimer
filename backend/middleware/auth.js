@@ -21,11 +21,17 @@ async function fetchJwks() {
   if (_jwks.keys && now - _jwks.fetchedAt < JWKS_TTL_MS) return _jwks.keys;
   const base = (process.env.SUPABASE_URL || '').replace(/\/+$/, '');
   if (!base) throw new Error('SUPABASE_URL not set — cannot resolve JWKS');
-  const res = await fetch(`${base}/auth/v1/.well-known/jwks.json`);
-  if (!res.ok) throw new Error(`JWKS fetch failed: HTTP ${res.status}`);
-  const data = await res.json();
-  _jwks = { keys: data.keys || [], fetchedAt: now };
-  return _jwks.keys;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const res = await fetch(`${base}/auth/v1/.well-known/jwks.json`, { signal: controller.signal });
+    if (!res.ok) throw new Error(`JWKS fetch failed: HTTP ${res.status}`);
+    const data = await res.json();
+    _jwks = { keys: data.keys || [], fetchedAt: now };
+    return _jwks.keys;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**

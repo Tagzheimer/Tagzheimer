@@ -30,9 +30,9 @@
 // ---------------------------------------------------------------------------
 // Backend (Tagzheimer API v2)
 // ---------------------------------------------------------------------------
-// Use http:// for local testing — HTTPS requires a valid certificate OR
-// the fingerprint mechanism described in backend_client.cpp.
-#define BACKEND_URL      "http://192.168.1.50:5000"
+// Use https:// in production. http:// is local-testing only — the firmware
+// sends bearer tokens that must not traverse plaintext networks.
+#define BACKEND_URL      "https://api.tagzheimer.com"
 
 // === Pairing ===
 #define BACKEND_PAIR_PATH       "/api/devices/pair"
@@ -75,6 +75,6 @@
 #define ENABLE_DEEP_SLEEP 1
 
 #define SERIAL_BAUD 115200
-#define DEBUG true
+#define DEBUG false
 
 #endif  // TAGZHEIMER_CONFIG_H

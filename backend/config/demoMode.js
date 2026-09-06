@@ -1,5 +1,7 @@
 const MONGO_ID = (n) => `00000000000000000000000${n}`.slice(-24);
 
+const DEMO_OWNER_ID = 'demo-user-uuid';
+
 const seedDevices = [
   {
     _id: MONGO_ID(1),
@@ -9,7 +11,7 @@ const seedDevices = [
     status: 'online',
     battery: 87,
     notes: 'Primary tracker - always worn',
-    ownerId: 'mock-uid',
+    ownerId: DEMO_OWNER_ID,
     pairingSecret: null,
     lastSeen: new Date(Date.now() - 2 * 60 * 1000),
     createdAt: new Date('2026-01-15'),
@@ -22,7 +24,7 @@ const seedDevices = [
     status: 'online',
     battery: 63,
     notes: 'Backup device',
-    ownerId: 'mock-uid',
+    ownerId: DEMO_OWNER_ID,
     pairingSecret: null,
     lastSeen: new Date(Date.now() - 5 * 60 * 1000),
     createdAt: new Date('2026-02-20'),
@@ -35,7 +37,7 @@ const seedDevices = [
     status: 'offline',
     battery: 12,
     notes: 'Needs charging',
-    ownerId: 'mock-uid',
+    ownerId: DEMO_OWNER_ID,
     pairingSecret: null,
     lastSeen: new Date(Date.now() - 120 * 60 * 1000),
     createdAt: new Date('2026-03-10'),
@@ -48,7 +50,7 @@ const seedDevices = [
     status: 'online',
     battery: 94,
     notes: '',
-    ownerId: 'mock-uid',
+    ownerId: DEMO_OWNER_ID,
     pairingSecret: null,
     lastSeen: new Date(Date.now() - 1 * 60 * 1000),
     createdAt: new Date('2026-04-05'),
@@ -64,13 +66,12 @@ const seedLocations = [
 
 function createDemoStore() {
   // Deep-clone seeds so tests can mutate without affecting the originals.
-  const devices = JSON.parse(JSON.stringify(seedDevices, (k, v) => {
-    // revive Date objects
-    return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v) ? new Date(v) : v;
-  }));
-  const locations = JSON.parse(JSON.stringify(seedLocations, (k, v) => {
-    return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v) ? new Date(v) : v;
-  }));
+  // NOTE: keep timestamps as ISO strings — every reader uses `new Date(x)`.
+  // A previous reviver returned `new Date(v)` from the stringify replacer,
+  // but JSON.stringify does not call toJSON() on replacer results, so every
+  // seed Date serialized as `{}` (empty object) over the API.
+  const devices = JSON.parse(JSON.stringify(seedDevices));
+  const locations = JSON.parse(JSON.stringify(seedLocations));
   let nextDeviceId = 5;
   let nextLocId = 14;
 
@@ -80,8 +81,8 @@ function createDemoStore() {
   return {
     User: {
       findOne: async (filter) => {
-        if (filter?.firebaseUid === 'mock-uid') {
-          return toObject({ _id: 'u1', name: 'John Doe', email: 'john@example.com', firebaseUid: 'mock-uid', createdAt: new Date() });
+        if (filter?.firebaseUid === 'mock-uid' || filter?.firebaseUid === DEMO_OWNER_ID) {
+          return toObject({ _id: 'u1', name: 'John Doe', email: 'john@example.com', firebaseUid: DEMO_OWNER_ID, createdAt: new Date() });
         }
         return null;
       },

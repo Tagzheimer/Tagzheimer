@@ -60,7 +60,11 @@ In the Supabase dashboard → **Project Settings** (gear icon, bottom left) → 
    - **Email OTP expiry**: 3600 (1 hour, default)
 3. **Users** → **Add user** → manually create your first caregiver account if you want to skip the email confirmation flow
 
-### 5. Seed demo data (optional)
+### 5. Audit real data (required when rows already exist)
+
+Run the read-only blocks in `backend/supabase/audit.sql` in the SQL Editor: legacy serials, case-variant duplicates, out-of-range telemetry, future-dated fixes, ownerless devices with locations. The hardened backend keeps old rows working (strict charset on creation only, exact-match-first lookups), but case-collisions need manual merge and future timestamps may need correction.
+
+### 6. Seed demo data (optional)
 
 After signing up your first user via the frontend, replace `<demo-user-uuid>` at the bottom of `schema.sql` with the user's `id` (visible in Authentication → Users) and run just the INSERT block to seed 4 demo devices.
 
@@ -258,7 +262,7 @@ The firmware doesn't need deployment in the cloud sense — flash it directly to
 5. Select board: **ESP32 Wrover Kit**
 6. Upload
 
-On first boot, the firmware calls `POST /api/devices/pair` with `SERIAL_NUMBER`, stores the returned access token in NVS, then starts sending GPS fixes every `UPDATE_INTERVAL_SECONDS`.
+On first boot, the firmware calls `POST /api/devices/pair` with `SERIAL_NUMBER` (provisions ownerless; owned serials get `409`), the caregiver claims via `POST /api/devices/:id/claim` (rotates the pairing secret, revokes pre-claim tokens, returns a fresh tracker token), stores the token in NVS, then starts sending GPS fixes every `UPDATE_INTERVAL_SECONDS`. Lost tokens are re-minted by the owner via `POST /api/devices/:id/token` — serial-only re-pair of an owned device intentionally fails.
 
 ---
 
@@ -288,13 +292,14 @@ Frontend env: set `VITE_API_URL=https://api.tagzheimer.com` at build time. Careg
 |----------|----------|---------|---------|
 | `PORT` | no | `5000` | HTTP port |
 | `NODE_ENV` | no | — | `production` enables strict mode |
-| `JWT_SECRET` | **yes (prod)** | dev fallback | Signs device JWTs (firmware + mobile app pairing) |
+| `JWT_SECRET` | **yes (prod)** | none — fails closed | Signs device JWTs (firmware + mobile app pairing). No public fallback in prod; server throws without it. Demo/test set it explicitly. |
 | `SUPABASE_URL` | **yes (prod)** | — | Supabase project URL |
 | `SUPABASE_ANON_KEY` | **yes (prod)** | — | Supabase anon key (browser-safe) |
 | `SUPABASE_SERVICE_KEY` | **yes (prod)** | — | Supabase service-role key (backend only) |
 | `SUPABASE_JWT_SECRET` | **yes (prod)** | — | Used to verify user JWTs |
 | `DEMO_MODE` | no | `false` | `true` skips Supabase, uses in-memory store |
 | `CLIENT_URL` | no | `http://localhost:5173` | CORS origin |
+| `TRUST_PROXY` | no | `1` | Trusted proxy hops for `req.ip` (rate-limit keys). `2` behind stacked proxies |
 
 ### Frontend (build-time, prefix `VITE_`)
 
@@ -378,18 +383,22 @@ Caddy auto-provisions Let's Encrypt certs.
 
 ## Security checklist (production)
 
-- [ ] `JWT_SECRET` is set to a random 32-byte hex string (not the dev fallback)
+- [ ] `JWT_SECRET` is set to a random 32-byte hex string (server fails closed without it — no dev fallback in prod)
 - [ ] `DEMO_MODE` is `false` (or unset)
 - [ ] Supabase service_role key is NEVER exposed in the frontend (only anon key)
 - [ ] Supabase RLS policies are enabled (run schema.sql)
 - [ ] Supabase DB password is strong and stored safely
 - [ ] `CLIENT_URL` matches your frontend URL exactly (CORS)
 - [ ] Backend is behind HTTPS (no plain HTTP in production)
-- [ ] Rate limits are sensible (default: 200 req / 15 min / IP for general, 100 for /update and /batch)
+- [ ] Rate limits fit your fleet (defaults: 600 / 15 min / IP general, 300 / IP + 60 / device ingest; single phone + dashboard on one NAT IP no longer 429s)
+- [ ] `TRUST_PROXY` matches your proxy hops (default `1` for Fly/Render/nginx; `2` behind Cloudflare → Fly) — without it all clients share one rate-limit bucket
 - [ ] Docker `HEALTHCHECK` works (verify `docker ps` shows "healthy")
 - [ ] `secrets.h` is git-ignored (firmware) and not committed
 - [ ] Supabase email confirmation is ON for real deployments (confirm email in Authentication → Providers → Email)
 - [ ] `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` are set at frontend build time
+- [ ] Owned-serial re-pair returns `409` (hijack blocked); claim rotation verified; pre-fix tracker tokens re-provisioned
+- [ ] No mock-location fallback: backend outage renders empty + error, never synthetic positions
+- [ ] Serial allowlist enforced (`A-Za-z0-9-_`, 3–64); `history?limit` strict `1..500`; future timestamps rejected; oversize `413`
 
 ---
 
@@ -400,7 +409,8 @@ Caddy auto-provisions Let's Encrypt certs.
 | Frontend shows `BACKEND UNREACHABLE` | Check `VITE_API_URL` was set at build time, OR override at runtime via Profile → Backend Settings |
 | Mobile app can't pair | Phone and backend must be on the same network, or backend must have public HTTPS URL |
 | Firmware `Pairing failed (code=-1)` | Backend URL not reachable from the WiFi network; check `BACKEND_URL` in `config.h` |
-| 401 on location updates | Token expired/revoked — firmware will auto re-pair on 401, mobile app you may need to re-pair via Settings |
+| 401 on location updates | Token expired/revoked (claim rotates secrets) — owner must mint via `POST /api/devices/:id/token` then re-provision the tracker; serial-only re-pair of an owned device returns `409` by design |
+| 429 on location updates | Per-device budget spent (~60 fixes / 15 min): raise the tracker interval, stop duplicate senders (old firmware + app double-registering), and check `RateLimit-Reset`. Whole-network 429s with light use mean `TRUST_PROXY` is wrong (all clients sharing one IP bucket) |
 | Backend can't reach Supabase | Verify `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, and that your Supabase project isn't paused (free tier pauses after 7 days inactive) |
 | CORS errors in browser console | `CLIENT_URL` on backend doesn't match the frontend's URL exactly (including protocol + port) |
 | `docker compose up` fails on build | Make sure subprojects have their `package-lock.json` committed (npm ci fails otherwise) |

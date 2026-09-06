@@ -125,6 +125,46 @@ body, h1, h2, h3, p, span, td, th, button, input, select, textarea {
 ::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 0; }
 ::-webkit-scrollbar-thumb:hover { background: #404040; }
 
+/* === Settings-driven appearance (see services/settings.js) ===
+   Applied via <html data-*> attributes so every control below is global.
+   Defaults live in DEFAULT_SETTINGS; main.jsx applies them pre-render. */
+
+/* Text size */
+html[data-text-size="s"] { font-size: 14px; }
+html[data-text-size="l"] { font-size: 18px; }
+
+/* High contrast — brighten secondary text + strengthen hairlines */
+html[data-contrast="high"] {
+  --color-ink-2: #e8e8e8;
+  --color-ink-3: #cfcfcf;
+  --color-ink-4: #a3a3a3;
+  --color-hairline: #4d4d4d;
+  --color-hairline-2: #5c5c5c;
+  --color-hairline-3: #8a8a8a;
+}
+
+/* Reduced motion — kill animation + transitions (keeps spin loaders static) */
+html[data-motion="reduced"] *,
+html[data-motion="reduced"] *::before,
+html[data-motion="reduced"] *::after {
+  animation: none !important;
+  transition: none !important;
+}
+
+/* Focus rings — keyboard navigation visibility */
+html[data-focus="visible"] :focus-visible {
+  outline: 2px solid #ffffff;
+  outline-offset: 2px;
+}
+html[data-focus="subtle"] :focus-visible {
+  outline: none;
+}
+
+/* === Range inputs (settings sliders) inherit the monochrome theme === */
+input[type="range"] {
+  accent-color: #ffffff;
+}
+
 /* === Leaflet overrides (dark mode map) === */
 .leaflet-container {
   height: 100%;
@@ -132,9 +172,9 @@ body, h1, h2, h3, p, span, td, th, button, input, select, textarea {
   background: #0a0a0a;
 }
 
-/* Dark-mode OpenStreetMap filter — inverts hues + reduces brightness.
-   This works because OSM tiles are light; inverting → dark map. */
-.leaflet-tile-pane {
+/* Dark-mode OpenStreetMap filter — only when the dark tile style is active.
+   Light + satellite tiles render unfiltered. */
+html[data-tiles="dark"] .leaflet-tile-pane {
   filter: invert(1) hue-rotate(180deg) brightness(0.85) contrast(0.9) saturate(0.3);
 }
 
@@ -177,6 +217,15 @@ body, h1, h2, h3, p, span, td, th, button, input, select, textarea {
 
 .overscroll-contain {
   overscroll-behavior: contain;
+}
+
+/* Scrollable chip/nav rows without the ugly scrollbar */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
 }
 
 /* Sharp corner preference — monochrome terminal aesthetic */

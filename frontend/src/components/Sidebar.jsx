@@ -1,11 +1,13 @@
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { DOCS_URL, REPO_WEB_URL, APP_VERSION } from '../utils/constants';
 
-const links = [
+const mainLinks = [
   {
     id: 'dashboard',
     label: 'Dashboard',
     path: '/dashboard',
+    match: (p) => p === '/dashboard' || p.startsWith('/device/'),
     icon: (active) =>
       active ? (
         <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
@@ -18,25 +20,31 @@ const links = [
       ),
   },
   {
-    id: 'scan',
-    label: 'Scan',
-    path: null,
-    icon: () => (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-4 h-4">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 013.75 9.375v-4.5zM3.75 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 01-1.125-1.125v-4.5zM13.5 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0113.5 9.375v-4.5z" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 01-1.125-1.125v-4.5z" />
-      </svg>
-    ),
-  },
-  {
     id: 'map',
     label: 'Map',
     path: '/map',
+    match: (p) => p === '/map',
     icon: () => (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-4 h-4">
         <path strokeLinecap="round" strokeLinejoin="round" d="M9 6.75V15m6-6v8.25m.503 3.498l4.875-2.437c.381-.19.622-.58.622-1.006V4.82c0-.836-.88-1.38-1.628-1.006l-3.869 1.934c-.317.159-.69.159-1.006 0L9.503 3.252a1.125 1.125 0 00-1.006 0L3.622 5.689C3.24 5.88 3 6.27 3 6.695V19.18c0 .836.88 1.38 1.628 1.006l3.869-1.934c.317-.159.69-.159 1.006 0l4.994 2.497c.317.158.69.158 1.006 0z" />
       </svg>
     ),
+  },
+  {
+    id: 'profile',
+    label: 'Profile',
+    path: '/profile',
+    match: (p) => p === '/profile',
+    icon: (active) =>
+      active ? (
+        <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
+          <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-4 h-4">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
+        </svg>
+      ),
   },
 ];
 
@@ -45,6 +53,13 @@ export default function Sidebar() {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
   const currentPath = location.pathname;
+
+  const navBtn = (active) =>
+    `w-full flex items-center gap-3 px-3 h-10 text-[13px] font-medium transition-colors tap-highlight border ${
+      active
+        ? 'bg-white text-canvas border-white'
+        : 'text-ink-2 hover:text-ink hover:bg-surface-2 border-transparent'
+    }`;
 
   return (
     <aside className="hidden md:flex md:flex-col md:fixed md:inset-y-0 md:w-64 bg-surface border-r border-hairline z-40">
@@ -67,31 +82,78 @@ export default function Sidebar() {
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-        <div className="label-mono px-3 pb-2 pt-2">Navigation</div>
-        {links.map((link) => {
-          const active = link.path === currentPath || (link.id === 'dashboard' && currentPath.startsWith('/device/'));
-          return (
+      <nav className="flex-1 px-3 py-4 space-y-5 overflow-y-auto">
+        <div>
+          <div className="label-mono px-3 pb-2">Navigation</div>
+          <div className="space-y-1">
+            {mainLinks.map((link) => {
+              const active = link.match(currentPath);
+              return (
+                <button key={link.id} onClick={() => navigate(link.path)} className={navBtn(active)}>
+                  {link.icon(active)}
+                  {link.label}
+                </button>
+              );
+            })}
             <button
-              key={link.id}
-              onClick={() => {
-                if (link.path) {
-                  navigate(link.path);
-                } else {
-                  window.dispatchEvent(new CustomEvent('scan:open'));
-                }
-              }}
-              className={`w-full flex items-center gap-3 px-3 h-10 text-[13px] font-medium transition-colors tap-highlight border ${
-                active
-                  ? 'bg-white text-canvas border-white'
-                  : 'text-ink-2 hover:text-ink hover:bg-surface-2 border-transparent'
-              }`}
+              onClick={() => window.dispatchEvent(new CustomEvent('scan:open'))}
+              className={navBtn(false)}
             >
-              {link.icon(active)}
-              {link.label}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-4 h-4">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 013.75 9.375v-4.5zM3.75 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 01-1.125-1.125v-4.5zM13.5 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0113.5 9.375v-4.5z" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 01-1.125-1.125v-4.5z" />
+              </svg>
+              Scan
             </button>
-          );
-        })}
+          </div>
+        </div>
+
+        <div>
+          <div className="label-mono px-3 pb-2">Resources</div>
+          <div className="space-y-1">
+            <a
+              href={DOCS_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="w-full flex items-center gap-3 px-3 h-10 text-[13px] font-medium text-ink-2 hover:text-ink hover:bg-surface-2 transition-colors tap-highlight border border-transparent"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-4 h-4">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" />
+              </svg>
+              Documentation
+              <svg className="w-3 h-3 ml-auto text-ink-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M7 17L17 7M7 7h10v10" />
+              </svg>
+            </a>
+            <a
+              href={REPO_WEB_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="w-full flex items-center gap-3 px-3 h-10 text-[13px] font-medium text-ink-2 hover:text-ink hover:bg-surface-2 transition-colors tap-highlight border border-transparent"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-4 h-4">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5" />
+              </svg>
+              GitHub
+              <svg className="w-3 h-3 ml-auto text-ink-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M7 17L17 7M7 7h10v10" />
+              </svg>
+            </a>
+          </div>
+        </div>
+
+        <div>
+          <div className="label-mono px-3 pb-2">Legal</div>
+          <div className="px-3 flex items-center gap-2 text-[12px]">
+            <Link to="/terms" className="text-ink-3 hover:text-ink transition-colors">
+              Terms
+            </Link>
+            <span className="text-ink-4">·</span>
+            <Link to="/privacy" className="text-ink-3 hover:text-ink transition-colors">
+              Privacy
+            </Link>
+          </div>
+        </div>
       </nav>
 
       {/* Footer / user */}
@@ -114,6 +176,9 @@ export default function Sidebar() {
           </svg>
           Logout
         </button>
+        <p className="text-center text-[10px] text-ink-4 mt-3 label-mono">
+          Tagzheimer {APP_VERSION}
+        </p>
       </div>
     </aside>
   );

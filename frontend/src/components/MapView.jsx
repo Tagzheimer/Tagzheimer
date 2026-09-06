@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import L from 'leaflet';
+import { TILE_LAYERS, useSettings } from '../services/settings';
+import { formatClock } from '../utils/format';
 
 // Build a custom monochrome div-icon — a small white square with crosshair,
 // fits the terminal aesthetic better than the default orange Leaflet pin.
@@ -40,21 +42,21 @@ const customIcon = L.divIcon({
   popupAnchor: [0, -24],
 });
 
-function MapCenterUpdater({ center }) {
+function MapCenterUpdater({ center, zoom }) {
   const map = useMap();
   const didSet = useRef(false);
 
   useEffect(() => {
     if (center && !didSet.current) {
-      map.setView(center, 15);
+      map.setView(center, zoom);
       didSet.current = true;
     }
-  }, [center, map]);
+  }, [center, zoom, map]);
 
   return null;
 }
 
-function LocationMarker({ position, address, timestamp }) {
+function LocationMarker({ position, address, timestamp, clock }) {
   return (
     <Marker position={position} icon={customIcon}>
       <Popup>
@@ -63,7 +65,7 @@ function LocationMarker({ position, address, timestamp }) {
           <p className="font-semibold text-ink">{address || 'Current Location'}</p>
           {timestamp && (
             <p className="text-ink-3 mt-1 text-[11px]">
-              Updated: {new Date(timestamp).toLocaleTimeString()}
+              Updated: {formatClock(timestamp, { clock })}
             </p>
           )}
         </div>
@@ -72,13 +74,21 @@ function LocationMarker({ position, address, timestamp }) {
   );
 }
 
-export default function MapView({ latitude, longitude, address, timestamp, fullscreen }) {
+export default function MapView({ latitude, longitude, address, timestamp, trail = [], fullscreen }) {
+  const { map: mapPrefs, display } = useSettings();
   const center = [latitude, longitude];
   const [mapReady, setMapReady] = useState(false);
+  const layer = TILE_LAYERS[mapPrefs.tiles] || TILE_LAYERS.dark;
+  const trailPositions = (Array.isArray(trail) ? trail : [])
+    .filter((f) => typeof f?.latitude === 'number' && typeof f?.longitude === 'number' && Number.isFinite(f.latitude) && Number.isFinite(f.longitude))
+    .map((f) => [f.latitude, f.longitude]);
 
   return (
     <div
-      className={`${fullscreen ? 'absolute inset-0' : 'w-full h-full'} overflow-hidden bg-canvas relative`}
+      // NOTE: `relative` must NOT be present in fullscreen mode — Tailwind
+      // emits `relative` after `absolute`, so it would win the cascade and
+      // collapse the map to 0px tall (tiles load but never paint).
+      className={`${fullscreen ? 'absolute inset-0' : 'w-full h-full relative'} overflow-hidden bg-canvas`}
       style={fullscreen ? { top: 0, bottom: 0, left: 0, right: 0 } : {}}
     >
       {!mapReady && (
@@ -94,28 +104,36 @@ export default function MapView({ latitude, longitude, address, timestamp, fulls
       )}
       <MapContainer
         center={center}
-        zoom={15}
+        zoom={mapPrefs.zoom}
         className="h-full w-full"
         zoomControl={true}
         whenReady={() => setMapReady(true)}
       >
         <TileLayer
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          attribution='&copy; OpenStreetMap'
+          url={layer.url}
+          attribution={`&copy; ${layer.attribution}`}
         />
-        <LocationMarker position={center} address={address} timestamp={timestamp} />
-        <MapCenterUpdater center={center} />
+        {trailPositions.length > 1 && (
+          <Polyline
+            positions={trailPositions}
+            pathOptions={{ color: '#ffffff', weight: 2, opacity: 0.65, dashArray: '1 7', lineCap: 'round' }}
+          />
+        )}
+        <LocationMarker position={center} address={address} timestamp={timestamp} clock={display.clock} />
+        <MapCenterUpdater center={center} zoom={mapPrefs.zoom} />
       </MapContainer>
 
-      {/* Crosshair overlay for telemetry feel — non-interactive */}
-      <div className="absolute inset-0 pointer-events-none z-[500]">
-        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 border border-white/30">
-          <div className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-full w-px h-3 bg-white/30" />
-          <div className="absolute left-1/2 bottom-0 -translate-x-1/2 translate-y-full w-px h-3 bg-white/30" />
-          <div className="absolute top-1/2 left-0 -translate-y-1/2 -translate-x-full h-px w-3 bg-white/30" />
-          <div className="absolute top-1/2 right-0 -translate-y-1/2 translate-y-0 translate-x-full h-px w-3 bg-white/30" />
+      {/* Crosshair overlay for telemetry feel — non-interactive, toggleable */}
+      {mapPrefs.crosshair && (
+        <div className="absolute inset-0 pointer-events-none z-[500]">
+          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 border border-white/30">
+            <div className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-full w-px h-3 bg-white/30" />
+            <div className="absolute left-1/2 bottom-0 -translate-x-1/2 translate-y-full w-px h-3 bg-white/30" />
+            <div className="absolute top-1/2 left-0 -translate-y-1/2 -translate-x-full h-px w-3 bg-white/30" />
+            <div className="absolute top-1/2 right-0 -translate-y-1/2 translate-y-0 translate-x-full h-px w-3 bg-white/30" />
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

@@ -20,11 +20,17 @@ function generatePairingSecret() {
 }
 
 /**
- * Get the JWT signing secret. Falls back to a dev secret if env is unset
- * so local testing works without a .env file.
+ * Get the JWT signing secret. Fails closed in production: a missing
+ * JWT_SECRET throws instead of falling back to a public dev string.
+ * Tests and demo mode set JWT_SECRET explicitly (see tests/setup.js).
  */
 function getJwtSecret() {
-  return process.env.JWT_SECRET || process.env.DEVICE_JWT_SECRET || 'tagzheimer-dev-secret-change-me';
+  const s = process.env.JWT_SECRET || process.env.DEVICE_JWT_SECRET;
+  if (s) return s;
+  if (process.env.NODE_ENV === 'test' || process.env.DEMO_MODE === 'true') {
+    return 'tagzheimer-dev-secret-change-me';
+  }
+  throw new Error('JWT_SECRET is required (generate with: openssl rand -hex 32)');
 }
 
 /**

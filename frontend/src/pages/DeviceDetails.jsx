@@ -4,39 +4,72 @@ import { QRCodeSVG } from 'qrcode.react';
 import { useDevices } from '../hooks/useDevices';
 import { useLocation } from '../hooks/useLocation';
 import { useAuth } from '../context/AuthContext';
+import { devicesAPI } from '../services/api';
+import { batteryTier, useSettings } from '../services/settings';
+import { formatTimestamp, formatCoords, formatSpeed, formatAltitude } from '../utils/format';
 import MapView from '../components/MapView';
-
-function getTimeAgo(dateStr) {
-  if (!dateStr) return '—';
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return 'just now';
-  if (mins === 1) return '1m ago';
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  return `${hrs}h ${mins % 60}m ago`;
-}
 
 export default function DeviceDetails() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { getDeviceById } = useDevices();
-  const { location, loading: locLoading, fetchLocation, getAddress } = useLocation();
+  const { getDeviceById, loading: listLoading } = useDevices();
+  const { location, loading: locLoading, fetchLocation, fetchHistory, getAddress } = useLocation();
   const { user } = useAuth();
+  const settings = useSettings();
   const [address, setAddress] = useState('');
+  const [trail, setTrail] = useState([]);
   const [showInfo, setShowInfo] = useState(false);
+  const [directDevice, setDirectDevice] = useState(null);
+  const [directError, setDirectError] = useState('');
 
-  const device = getDeviceById(id);
+  const cached = getDeviceById(id);
+  const device = cached || directDevice;
+
+  // Deep-link fallback: if the list hasn't loaded (or the device isn't in
+  // it), fetch directly by id instead of showing a false 404.
+  useEffect(() => {
+    let cancelled = false;
+    if (cached || !id) return undefined;
+    if (listLoading) return undefined;
+    (async () => {
+      try {
+        const { data } = await devicesAPI.getById(id);
+        if (!cancelled) setDirectDevice(data);
+      } catch (err) {
+        if (!cancelled) setDirectError(err?.response?.status === 404 ? 'not-found' : 'error');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [cached, id, listLoading]);
+
+  const deviceId = device ? String(device._id || device.id || id) : null;
 
   useEffect(() => {
-    if (device) fetchLocation(device._id);
-  }, [device, fetchLocation]);
+    if (deviceId) fetchLocation(deviceId);
+  }, [deviceId, fetchLocation]);
+
+  // Trail polyline — length comes from Settings → Map → Trail.
+  useEffect(() => {
+    let cancelled = false;
+    if (!deviceId) return undefined;
+    fetchHistory(deviceId).then((fixes) => {
+      if (!cancelled) setTrail(Array.isArray(fixes) ? fixes : []);
+    });
+    return () => { cancelled = true; };
+  }, [deviceId, fetchHistory, settings.map.trail]);
 
   useEffect(() => {
     if (location) getAddress(location.latitude, location.longitude).then(setAddress);
   }, [location, getAddress]);
 
   if (!device) {
+    if (listLoading || (!directError && !cached)) {
+      return (
+        <div className="min-h-dvh md:min-h-screen bg-canvas flex items-center justify-center">
+          <span className="label-mono">Loading device…</span>
+        </div>
+      );
+    }
     return (
       <div className="min-h-dvh md:min-h-screen bg-canvas flex items-center justify-center">
         <div className="text-center px-5">
@@ -52,9 +85,10 @@ export default function DeviceDetails() {
   }
 
   const online = device.status === 'online';
-  // Monochrome battery levels: bright = full, mid = low, dim = critical
-  const batteryClass = device.battery >= 60 ? 'text-ink' : device.battery >= 20 ? 'text-ink-2' : 'text-ink-3';
-  const batteryBarClass = device.battery >= 60 ? 'bg-white' : device.battery >= 20 ? 'bg-ink-2' : 'bg-ink-3';
+  // Monochrome battery tiers — critical boundary is the user's threshold.
+  const tier = batteryTier(device.battery, settings.devices.lowBattery);
+  const batteryClass = tier === 'full' ? 'text-ink' : tier === 'mid' ? 'text-ink-2' : 'text-ink-3';
+  const batteryBarClass = tier === 'full' ? 'bg-white' : tier === 'mid' ? 'bg-ink-2' : 'bg-ink-3';
 
   const infoPanel = (
     <>
@@ -85,15 +119,15 @@ export default function DeviceDetails() {
           <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
             <rect x="2" y="7" width="18" height="10" rx="1" /><path d="M22 11v2" strokeLinecap="round" />
           </svg>
-          {device.battery}%
+          {device.battery === null || device.battery === undefined ? '—' : `${device.battery}%`}
         </span>
         <span className="text-ink-4 hidden md:inline">·</span>
-        <span className="text-ink-3 label-mono">{getTimeAgo(device.lastSeen)}</span>
+        <span className="text-ink-3 label-mono">{formatTimestamp(device.lastSeen, settings.display)}</span>
       </div>
 
       {/* Battery bar */}
       <div className="h-1 bg-surface-3 overflow-hidden mb-4">
-        <div className={`h-full ${batteryBarClass}`} style={{ width: `${device.battery}%` }} />
+        <div className={`h-full ${batteryBarClass}`} style={{ width: `${Math.min(100, Math.max(0, Number(device.battery) || 0))}%` }} />
       </div>
 
       {/* Address */}
@@ -114,7 +148,7 @@ export default function DeviceDetails() {
       {/* Action buttons */}
       <div className="grid grid-cols-3 gap-2 mb-2">
         <button
-          onClick={() => fetchLocation(device._id)}
+          onClick={() => fetchLocation(deviceId)}
           disabled={locLoading}
           className="h-11 bg-white text-canvas text-[13px] font-semibold tap-highlight disabled:opacity-40 flex items-center justify-center gap-1.5 hover:bg-ink-2 transition-colors"
         >
@@ -149,16 +183,14 @@ export default function DeviceDetails() {
         <div className="mt-3 pt-3 border-t border-hairline space-y-2 animate-fade-in">
           <div className="label-mono mb-2">Telemetry</div>
           <div className="flex justify-between text-[13px] py-1">
-            <span className="text-ink-3">Latitude</span>
-            <span className="font-semibold text-ink tabular-nums">{location?.latitude?.toFixed(6) || '—'}</span>
-          </div>
-          <div className="flex justify-between text-[13px] py-1">
-            <span className="text-ink-3">Longitude</span>
-            <span className="font-semibold text-ink tabular-nums">{location?.longitude?.toFixed(6) || '—'}</span>
+            <span className="text-ink-3">Position</span>
+            <span className="font-semibold text-ink tabular-nums text-right">
+              {location ? formatCoords(location.latitude, location.longitude, settings.display.coords) : '—'}
+            </span>
           </div>
           <div className="flex justify-between text-[13px] py-1">
             <span className="text-ink-3">Last Update</span>
-            <span className="text-ink-2">{location?.timestamp ? new Date(location.timestamp).toLocaleTimeString() : '—'}</span>
+            <span className="text-ink-2">{location?.timestamp ? formatTimestamp(location.timestamp, settings.display) : '—'}</span>
           </div>
           <div className="flex justify-between text-[13px] py-1">
             <span className="text-ink-3">Source</span>
@@ -181,13 +213,13 @@ export default function DeviceDetails() {
           <div className="flex justify-between text-[13px] py-1">
             <span className="text-ink-3">Altitude</span>
             <span className="font-semibold text-ink tabular-nums">
-              {location?.altitude != null ? `${location.altitude.toFixed(1)} m` : '—'}
+              {formatAltitude(location?.altitude, settings.display.units)}
             </span>
           </div>
           <div className="flex justify-between text-[13px] py-1">
             <span className="text-ink-3">Speed</span>
             <span className="font-semibold text-ink tabular-nums">
-              {location?.speed != null ? `${location.speed.toFixed(1)} km/h` : '—'}
+              {formatSpeed(location?.speed, settings.display.units)}
             </span>
           </div>
           <div className="flex justify-between text-[13px] py-1">
@@ -211,7 +243,7 @@ export default function DeviceDetails() {
         <div className="flex gap-4">
           <div className="bg-white p-3 flex-shrink-0 self-start relative">
             <QRCodeSVG
-              value={`${window.location.origin}/d/${device._id}`}
+              value={`${window.location.origin}/d/${deviceId}`}
               size={96}
               bgColor="#ffffff"
               fgColor="#0a0a0a"
@@ -244,9 +276,12 @@ export default function DeviceDetails() {
     <>
       {/* Mobile layout */}
       <div className="md:hidden min-h-dvh bg-canvas flex flex-col relative">
-        <div className="absolute inset-0 z-0">
+        {/* Map backdrop — h-dvh (not just inset-0): the parent only has
+            min-height, which absolute children can't resolve, so without an
+            explicit height Leaflet initializes at 0px and tiles never paint. */}
+        <div className="absolute inset-0 z-0 h-dvh">
           {location ? (
-            <MapView latitude={location.latitude} longitude={location.longitude} address={address} timestamp={location.timestamp} fullscreen />
+            <MapView latitude={location.latitude} longitude={location.longitude} address={address} timestamp={location.timestamp} trail={trail} fullscreen />
           ) : (
             <div className="h-full flex items-center justify-center bg-canvas">
               <div className="flex flex-col items-center gap-3">
@@ -266,14 +301,14 @@ export default function DeviceDetails() {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
               </svg>
             </button>
-            <button onClick={() => fetchLocation(device._id)} disabled={locLoading} className="w-10 h-10 bg-surface/90 backdrop-blur-sm border border-hairline-2 flex items-center justify-center tap-highlight disabled:opacity-50" aria-label="Refresh location">
+            <button onClick={() => fetchLocation(deviceId)} disabled={locLoading} className="w-10 h-10 bg-surface/90 backdrop-blur-sm border border-hairline-2 flex items-center justify-center tap-highlight disabled:opacity-50" aria-label="Refresh location">
               <svg className={`w-4 h-4 text-ink ${locLoading ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
             </button>
           </div>
           <div className="flex-1" />
-          <div className="bg-surface border-t border-hairline-2 px-5 pt-5 pb-8 animate-slide-up safe-bottom">
+          <div className="bg-surface border-t border-hairline-2 px-5 pt-5 pb-8 animate-slide-up safe-bottom max-h-[88dvh] overflow-y-auto overscroll-contain">
             {infoPanel}
           </div>
         </div>
@@ -310,7 +345,7 @@ export default function DeviceDetails() {
           </div>
           <div className="flex-1 relative min-h-0">
             {location ? (
-              <MapView latitude={location.latitude} longitude={location.longitude} address={address} timestamp={location.timestamp} />
+              <MapView latitude={location.latitude} longitude={location.longitude} address={address} timestamp={location.timestamp} trail={trail} />
             ) : (
               <div className="h-full flex items-center justify-center bg-canvas">
                 <div className="flex flex-col items-center gap-3">

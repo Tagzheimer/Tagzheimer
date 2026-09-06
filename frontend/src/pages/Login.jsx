@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { isSupabaseConfigured } from '../services/supabase';
+import { DOCS_URL, REPO_WEB_URL, APP_VERSION } from '../utils/constants';
 
 export default function Login() {
   const [email, setEmail] = useState('');
@@ -19,6 +20,10 @@ export default function Login() {
     e.preventDefault();
     if (!email || !password) {
       setError('Please enter email and password');
+      return;
+    }
+    if (mode === 'signup' && !supabaseReady) {
+      setError('Sign-up needs Supabase. Use Sign In for demo mode (any password works).');
       return;
     }
     if (mode === 'signup' && password.length < 6) {
@@ -82,7 +87,7 @@ export default function Login() {
 
           {/* Telemetry-style footer */}
           <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between text-[11px] text-ink-3 label-mono pt-8">
-            <span>v1.0.0</span>
+            <span>{APP_VERSION}</span>
             <span className="flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 bg-white rounded-full animate-pulse-soft" />
               SYSTEM ONLINE
@@ -172,7 +177,24 @@ export default function Login() {
               </label>
               <button
                 type="button"
-                onClick={() => setInfo('Password reset is not available in demo mode. Please contact support.')}
+                onClick={async () => {
+                  if (!supabaseReady) {
+                    setInfo('Password reset is not available in demo mode. Please contact support.');
+                    return;
+                  }
+                  if (!email) {
+                    setError('Enter your email first, then tap Forgot password.');
+                    return;
+                  }
+                  try {
+                    const { supabase } = await import('../services/supabase');
+                    const { error } = await supabase.auth.resetPasswordForEmail(email);
+                    if (error) throw new Error(error.message);
+                    setInfo('Password reset email sent. Check your inbox.');
+                  } catch (err) {
+                    setError(err.message || 'Password reset failed');
+                  }
+                }}
                 className="text-[13px] text-ink font-medium tap-highlight min-touch hover:underline underline-offset-4"
               >
                 Forgot password?
@@ -235,8 +257,25 @@ export default function Login() {
         </div>
 
         <div className="mt-10 pt-6 border-t border-hairline">
+          <div className="flex items-center justify-center gap-3 text-[11px] label-mono mb-2">
+            <Link to="/terms" className="text-ink-3 hover:text-ink transition-colors">
+              Terms
+            </Link>
+            <span className="text-ink-4">·</span>
+            <Link to="/privacy" className="text-ink-3 hover:text-ink transition-colors">
+              Privacy
+            </Link>
+            <span className="text-ink-4">·</span>
+            <a href={DOCS_URL} target="_blank" rel="noopener noreferrer" className="text-ink-3 hover:text-ink transition-colors">
+              Docs ↗
+            </a>
+            <span className="text-ink-4">·</span>
+            <a href={REPO_WEB_URL} target="_blank" rel="noopener noreferrer" className="text-ink-3 hover:text-ink transition-colors">
+              GitHub ↗
+            </a>
+          </div>
           <p className="text-center text-[11px] text-ink-3 label-mono">
-            Tagzheimer · Keeping loved ones safe
+            Tagzheimer {APP_VERSION} · Keeping loved ones safe
           </p>
         </div>
       </div>

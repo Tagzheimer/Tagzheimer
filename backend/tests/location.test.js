@@ -7,8 +7,11 @@ const auth = 'Bearer mock-token';
 
 async function pairAndClaim(serial) {
   const pair = await request(app).post('/api/devices/pair').send({ serialNumber: serial });
-  await request(app).post(`/api/devices/${pair.body.deviceId}/claim`).set('Authorization', auth);
-  return pair.body;
+  const claim = await request(app).post(`/api/devices/${pair.body.deviceId}/claim`).set('Authorization', auth);
+  // Claim rotates the pairing secret: the pair-time token is revoked and a
+  // fresh tracker token is returned. Prefer the fresh token when present.
+  const accessToken = claim.body?.accessToken || pair.body.accessToken;
+  return { ...pair.body, accessToken };
 }
 
 describe('location', () => {
@@ -67,4 +70,23 @@ describe('location', () => {
     const r = await request(app).get(`/api/location/${deviceId}`).set('Authorization', auth);
     expect(r.status).toBe(404);
   });
+  it('per-device ingest throttled after burst, other devices unaffected', async () => {
+    // Ownerless pair token stays valid (no claim → no rotation).
+    const a = await request(app).post('/api/devices/pair').send({ serialNumber: `TAG-BURST-${Date.now()}` });
+    const b = await request(app).post('/api/devices/pair').send({ serialNumber: `TAG-QUIET-${Date.now()}` });
+    let throttled = 0;
+    for (let i = 0; i < 65; i++) {
+      const r = await request(app).post('/api/location/update')
+        .set('Authorization', `Bearer ${a.body.accessToken}`)
+        .send({ latitude: 40.7, longitude: -74 });
+      if (r.status === 429) throttled++;
+      else expect(r.status).toBe(201);
+    }
+    expect(throttled).toBeGreaterThan(0);
+    // Per-device bucket: a different tracker on the same IP still sends.
+    const ok = await request(app).post('/api/location/update')
+      .set('Authorization', `Bearer ${b.body.accessToken}`)
+      .send({ latitude: 40.7, longitude: -74 });
+    expect(ok.status).toBe(201);
+  }, 60000);
 });
